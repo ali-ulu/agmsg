@@ -311,7 +311,7 @@ EOF
   grep -q '^locked bootout$' "$events"
 }
 
-@test "daemon.sh status/enable/disable: an install.db with only the 2-column meta works" {
+@test "daemon.sh: an install.db with only the 2-column meta -- status only reads, enable and disable bring it up to date" {
   [ "$(uname -s)" = "Darwin" ] || skip "this test's fake stands in for launchd specifically"
   mkdir -p "$TEST_SKILL_DIR/run"
   sqlite3 "$TEST_SKILL_DIR/run/install.db" "CREATE TABLE meta (schema_version INTEGER NOT NULL, install_id TEXT NOT NULL); INSERT INTO meta VALUES (1, 'daemon-sh-test');"
@@ -320,7 +320,9 @@ EOF
   fake_launchctl="$(_fake_launchctl)"
 
   run bash "$DAEMON" status
-  [[ "$output" != *"no such"* && "$output" != *"could not read install.db"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not in use yet"* ]]
+  [ -z "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT name FROM sqlite_master WHERE name='daemon_owner';")" ]
   AGMSGD_LAUNCHCTL="$fake_launchctl" AGMSGD_FAKE_LAUNCHD_MARKER="$TEST_SKILL_DIR/fake-launchd/registered" AGMSGD_FAKE_LAUNCHD_EVENTS="$TEST_SKILL_DIR/fake-launchd/events" AGMSGD_FAKE_OP_LOCK_DB="$TEST_SKILL_DIR/run/install-op.lock.db" AGMSGD_TEST_LAUNCHER="$SCRIPTS/daemon/agmsgd-launch.sh" \
     run bash "$DAEMON" enable
   [ "$status" -eq 0 ]
