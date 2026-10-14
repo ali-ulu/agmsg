@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { openInstallDb } from '../scripts/daemon/db.mjs';
@@ -81,4 +81,28 @@ test('installer restart guidance tells users to resume, refresh their destinatio
   assert.match(output, /does not enable agmsgd/);
   assert.equal((source.match(/^  agmsg_install_restart_guidance$/gm) ?? []).length, 1);
   assert.equal((source.match(/^agmsg_install_restart_guidance$/gm) ?? []).length, 1);
+});
+
+test('status suppresses managed SQLite experimental notices but retains ordinary warnings', t => {
+  const { root } = fixture(t);
+  const entry = join(root, 'scripts/daemon/status.mjs');
+  writeFileSync(entry, readFileSync(entry, 'utf8') + '\nprocess.emitWarning("SQLite is an experimental feature", "ExperimentalWarning");\nprocess.emitWarning("fixture ordinary warning");\n');
+  const result = spawnSync('bash', [join(root, 'scripts/daemon.sh'), 'status'], { encoding: 'utf8', env: { ...process.env, AGMSG_CONFIG: join(root, 'config.json') } });
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /ExperimentalWarning|SQLite is an experimental/);
+  assert.match(result.stderr, /fixture ordinary warning/);
+});
+
+test('launcher ignores temporary npx PATH entries and still gives the permanent command check', () => {
+  const root = mkdtempSync(join(tmpdir(), 'launcher-npx-status-'));
+  const transient = join(root, '_npx/temporary/node_modules/.bin');
+  mkdirSync(transient, { recursive: true });
+  const entry = join(transient, 'agmsg');
+  writeFileSync(entry, '#!/bin/sh\n# agmsg npm bootstrapper\n');
+  chmodSync(entry, 0o755);
+  const output = execFileSync('bash', ['-c', 'source "$1"; agmsg_launcher_install "$2"', '_', join(repo, 'scripts/lib/agmsg-launcher.sh'), join(root, 'install')], {
+    encoding: 'utf8', env: { ...process.env, AGMSG_BIN_DIR: join(root, 'bin'), PATH: `${transient}:/usr/bin:/bin:/usr/sbin:/sbin` },
+  });
+  assert.doesNotMatch(output, /currently resolves to|_npx|older npm/);
+  assert.match(output, /open a new terminal and run: command -v agmsg/);
 });

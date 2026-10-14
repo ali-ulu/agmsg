@@ -193,8 +193,8 @@ async function main() {
   const reachable = owner.state === "ready" && owner.socket ? await probeSocket(owner.socket) : false;
   const result = classify({ owner, intent, alive, reachable, lastAttempt });
 
-  // The node:sqlite experimental-feature warning is surfaced here, always
-  // -- not hidden, not treated as a failure.
+  // The CLI suppresses Node's ExperimentalWarning category for managed SQLite
+  // usage. Ordinary warnings and errors are still surfaced.
   //
   // `process.exitCode = ...` and returning, NOT `process.exit(...)`: when
   // stdout is a pipe rather than a TTY (exactly what capturing this

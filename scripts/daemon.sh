@@ -388,7 +388,7 @@ _unregister() {
 _resolve_node() {
   local candidate="${1:-node}" resolved
   resolved="$(command -v "$candidate" 2>/dev/null)" || return 1
-  "$resolved" -e '
+  "$resolved" --disable-warning=ExperimentalWarning -e '
     const [maj, min] = process.versions.node.split(".").map(Number);
     if (maj < 22 || (maj === 22 && min < 13)) process.exit(1);
     require("node:sqlite");
@@ -538,12 +538,12 @@ cmd_status() {
   if [ -n "$node_path" ]; then
     local status_rc=0
     if [ "$json" = true ]; then
-      "$node_path" "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" --json || status_rc=$?
+      "$node_path" --disable-warning=ExperimentalWarning "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" --json || status_rc=$?
     else
       if [ "$AGMSG_DAEMON_ALL" = 1 ]; then
-        "$node_path" "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" --all || status_rc=$?
+        "$node_path" --disable-warning=ExperimentalWarning "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" --all || status_rc=$?
       else
-        "$node_path" "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" || status_rc=$?
+        "$node_path" --disable-warning=ExperimentalWarning "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" || status_rc=$?
       fi
       agmsg_daemon_seat_report status
     fi
