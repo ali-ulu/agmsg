@@ -18,28 +18,17 @@
 #     to ~/.claude, since this machine's own accounts live elsewhere.
 
 agmsg_session_start() {
-  if ! declare -F agmsg_role_session_set_messaging >/dev/null 2>&1; then
+  if ! declare -F agmsg_claude_code_native_target >/dev/null 2>&1; then
     # shellcheck disable=SC1091
     . "${SKILL_DIR:-}/scripts/lib/role-session.sh"
   fi
 
-  # Same guard shape codex-record-session.sh applies to CODEX_HOME: anything
-  # that is not an absolute path, or that carries a control character, is
-  # never published as a delivery destination (a malformed value is worse
-  # than none -- it would look addressable and silently never deliver).
-  local raw_socket="${CLAUDE_CODE_MESSAGING_SOCKET:-}" socket=""
-  case "$raw_socket" in
-    uds:/*) socket="${raw_socket#uds:}" ;;
-    /*) socket="$raw_socket" ;;
-  esac
-  case "$socket" in *[[:cntrl:]]*) socket="" ;; esac
-
-  local config_dir="${CLAUDE_CONFIG_DIR:-${HOME:+$HOME/.claude}}"
-  case "$config_dir" in
-    *[[:cntrl:]]*) config_dir="" ;;
-    /*) ;;
-    *) config_dir="" ;;
-  esac
+  # A malformed or missing destination is never published (see
+  # agmsg_claude_code_native_target).
+  local target socket config_dir
+  target="$(agmsg_claude_code_native_target)" || return 0
+  socket="${target%%$'\t'*}"
+  config_dir="${target#*$'\t'}"
 
   # Check every OTHER precondition FIRST, before ever touching a lock
   # (#1577 re-review): a session that cannot possibly use the native path
@@ -48,7 +37,6 @@ agmsg_session_start() {
   # agmsgd disabled or no socket could still silently seize an actas lock it
   # was never going to use -- only Monitor's own watch.sh was ever supposed
   # to touch that lock in that case.
-  if [ -z "$socket" ]; then return 0; fi
   if ! command -v _agmsg_detect_platform >/dev/null 2>&1; then
     # shellcheck disable=SC1091
     . "${SKILL_DIR:-}/scripts/lib/compat.sh"
@@ -110,12 +98,8 @@ EOF
       IFS="$_tab" read -r pair_team pair_agent <<EOF
 ${PAIRS:-}
 EOF
-      if [ -z "$(agmsg_role_session_get "$pair_team" "$pair_agent" type 2>/dev/null || true)" ]; then
-        agmsg_role_session_record "$pair_team" "$pair_agent" "$bare_sid" \
-          "$(agmsg_canonical_path "${PROJECT:-}" 2>/dev/null || printf '%s' "${PROJECT:-}")" "${TYPE:-}"
-      fi
     else
-      echo "AGMSG delivery: agmsgd is running, but this project has several registered seats and none is recorded for this session, so the native channel is not used. Next: run /agmsg actas <name>, or arm the Monitor below."
+      echo "AGMSG delivery: agmsgd is running, but this project has several registered seats and none is recorded for this session, so the native channel is not used. Next: run /agmsg actas <name> (it switches to direct delivery), or arm the Monitor below."
       return 0
     fi
   elif [ "$_n" -gt 1 ]; then
@@ -145,13 +129,14 @@ EOF
   # (messaging_socket/claude_config_dir both present and non-empty) before
   # it will ever address this seat, so "the record actually took" must be
   # verified here too, not assumed from the write call returning.
-  agmsg_role_session_set_messaging "$pair_team" "$pair_agent" "$socket" "$config_dir" "$bare_sid"
-  local readback_socket readback_config_dir readback_session
-  readback_socket="$(agmsg_role_session_get "$pair_team" "$pair_agent" messaging_socket 2>/dev/null || true)"
-  readback_config_dir="$(agmsg_role_session_get "$pair_team" "$pair_agent" claude_config_dir 2>/dev/null || true)"
-  readback_session="$(agmsg_role_session_uuid "$pair_team" "$pair_agent" 2>/dev/null || true)"
-  if [ "$readback_socket" = "$socket" ] && [ -n "$config_dir" ] && \
-     [ "$readback_config_dir" = "$config_dir" ] && [ "$readback_session" = "$bare_sid" ]; then
+  # Only now, holding the lock, may a missing record be created: an existing
+  # record belongs to whoever it names, and the claim above is what shows the
+  # seat is ours.
+  if [ -z "$(agmsg_role_session_get "$pair_team" "$pair_agent" type 2>/dev/null || true)" ]; then
+    agmsg_role_session_record "$pair_team" "$pair_agent" "$bare_sid" \
+      "$(agmsg_canonical_path "${PROJECT:-}" 2>/dev/null || printf '%s' "${PROJECT:-}")" "${TYPE:-}" "$my_instance"
+  fi
+  if agmsg_role_session_publish_messaging "$pair_team" "$pair_agent" "$socket" "$config_dir" "$bare_sid"; then
     cat <<EOF
 AGMSG delivery: agmsgd is running and will deliver to this session directly (native channel). No Monitor needed.
 EOF

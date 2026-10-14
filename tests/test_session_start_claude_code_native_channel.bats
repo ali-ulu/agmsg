@@ -148,6 +148,33 @@ _mark_daemon_ready() {
 # own SESSION_ID is the SAME bare "shared" but a DIFFERENT live pid, so the
 # caller's own composite id differs from bob's lock owner even though their
 # bare sids are identical. Only an exact composite match may write.
+# The seat's record belongs to whoever it names: another live session holding
+# the lock must keep its record even when the record lacks a type line.
+@test "session-start: a lone seat held by another live session keeps that session's record" {
+  _mark_daemon_ready
+  source "$SCRIPTS/lib/role-session.sh"
+  source "$SCRIPTS/lib/actas-lock.sh"
+  agmsg_role_session_record team alice peer "$PROJ" ""
+  actas_lock_claim team alice "peer.$$" >/dev/null
+  run env AGMSG_AGENT_PID=1 AGMSG_RESOLVE_PROJECT=0 CLAUDE_CODE_MESSAGING_SOCKET="uds:/tmp/cc-socks/new.sock" \
+    bash "$SCRIPTS/session-start.sh" claude-code "$PROJ" <<< '{"session_id":"new"}'
+  [ "$status" -eq 0 ]
+  [ "$(agmsg_role_session_uuid team alice)" = peer ]
+}
+
+# A seat chosen by actas moves to direct delivery on the spot, even when the
+# project registers several seats (session-start alone cannot pick one then).
+@test "actas-claim: daemon ready and a messaging socket -> records the socket and prints delivery=native" {
+  _mark_daemon_ready
+  bash "$SCRIPTS/join.sh" team bob claude-code "$PROJ" >/dev/null
+  run env AGMSG_AGENT_PID=$$ CLAUDE_CODE_MESSAGING_SOCKET="uds:/tmp/cc-socks/sid-actas-native.sock" \
+    bash "$SCRIPTS/actas-claim.sh" "$PROJ" claude-code bob "sid-actas-native"
+  [ "$status" -eq 0 ]
+  grep -qx "delivery=native" <<<"$output"
+  source "$SCRIPTS/lib/role-session.sh"
+  [ "$(agmsg_role_session_get team bob messaging_socket)" = /tmp/cc-socks/sid-actas-native.sock ]
+}
+
 @test "session-start: a different live pid with the SAME bare session id never overwrites that seat's record" {
   _mark_daemon_ready
   bash "$SCRIPTS/join.sh" team bob claude-code "$PROJ" >/dev/null

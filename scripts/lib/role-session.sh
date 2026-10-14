@@ -475,3 +475,37 @@ agmsg_role_session_match_unique() {
   printf '%s\n' "$match"
   return 0
 }
+
+# Print "<socket>\t<claude_config_dir>" for this Claude Code process, or
+# nothing (rc 1) when it has no usable messaging socket. Same guard shape
+# codex-record-session.sh applies to CODEX_HOME: anything that is not an
+# absolute path, or that carries a control character, is never published as a
+# delivery destination (a malformed value would look addressable and silently
+# never deliver). CLAUDE_CONFIG_DIR falls back to ~/.claude only when unset;
+# it must never be hardcoded, since accounts can live elsewhere.
+agmsg_claude_code_native_target() {
+  local raw="${CLAUDE_CODE_MESSAGING_SOCKET:-}" socket="" config_dir="${CLAUDE_CONFIG_DIR:-${HOME:+$HOME/.claude}}"
+  case "$raw" in
+    uds:/*) socket="${raw#uds:}" ;;
+    /*) socket="$raw" ;;
+  esac
+  case "$socket" in *[[:cntrl:]]*) socket="" ;; esac
+  case "$config_dir" in
+    *[[:cntrl:]]*) config_dir="" ;;
+    /*) ;;
+    *) config_dir="" ;;
+  esac
+  [ -n "$socket" ] && [ -n "$config_dir" ] || return 1
+  printf '%s\t%s\n' "$socket" "$config_dir"
+}
+
+# Publish <socket>/<config_dir> into <team>/<agent>'s record for <bare_sid>,
+# then read it back: the same check the daemon applies before it will address
+# the seat, so "the record took" is verified, not assumed. rc 0 only when it did.
+agmsg_role_session_publish_messaging() {   # <team> <agent> <socket> <config_dir> <bare_sid>
+  local team="$1" agent="$2" socket="$3" config_dir="$4" bare_sid="$5"
+  agmsg_role_session_set_messaging "$team" "$agent" "$socket" "$config_dir" "$bare_sid"
+  [ "$(agmsg_role_session_get "$team" "$agent" messaging_socket 2>/dev/null || true)" = "$socket" ] \
+    && [ "$(agmsg_role_session_get "$team" "$agent" claude_config_dir 2>/dev/null || true)" = "$config_dir" ] \
+    && [ "$(agmsg_role_session_uuid "$team" "$agent" 2>/dev/null || true)" = "$bare_sid" ]
+}
