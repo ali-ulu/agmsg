@@ -556,6 +556,14 @@ cmd_status() {
       *) _usage; return 2 ;;
     esac
   done
+  local owner_tables
+  # Only a database that answers and has no daemon_owner table is "not in use
+  # yet"; a query that fails (corrupt, locked) falls through to the normal
+  # read below and is reported as unknown.
+  if owner_tables="$(sqlite3 "$INSTALL_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='daemon_owner';" 2>/dev/null)" && [ "$owner_tables" = 0 ] && [ "$json" != true ]; then
+    echo "agmsg daemon status: agmsgd is not in use yet (turn it on with 'agmsg daemon enable')"
+    return 0
+  fi
   local node_path
   node_path="$(_resolve_node node 2>/dev/null || true)"
   if [ -n "$node_path" ]; then

@@ -331,6 +331,10 @@ EOF
   AGMSGD_LAUNCHCTL="$fake_launchctl" AGMSGD_FAKE_LAUNCHD_MARKER="$TEST_SKILL_DIR/fake-launchd/registered" AGMSGD_FAKE_LAUNCHD_EVENTS="$TEST_SKILL_DIR/fake-launchd/events" AGMSGD_FAKE_OP_LOCK_DB="$TEST_SKILL_DIR/run/install-op.lock.db" \
     run bash "$DAEMON" disable
   [ "$status" -eq 0 ]
+  printf 'not a sqlite database' > "$TEST_SKILL_DIR/run/install.db"
+  run bash "$DAEMON" status
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"not in use yet"* ]]
 }
 
 @test "daemon.sh start: stale ready state asks the registered manager to start the service" {
