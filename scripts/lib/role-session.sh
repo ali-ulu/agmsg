@@ -509,3 +509,20 @@ agmsg_role_session_publish_messaging() {   # <team> <agent> <socket> <config_dir
     && [ "$(agmsg_role_session_get "$team" "$agent" claude_config_dir 2>/dev/null || true)" = "$config_dir" ] \
     && [ "$(agmsg_role_session_uuid "$team" "$agent" 2>/dev/null || true)" = "$bare_sid" ]
 }
+
+# rc 0 only when agmsgd's Claude channel will accept this install's storage:
+# the same rule as readStorageDriver in scripts/daemon/channels/
+# codex-queue-store.mjs (a missing config is the sqlite default; a config that
+# is not a JSON object, or a "storage" other than sqlite, is blocked there).
+# Declaring the native channel when the daemon will refuse to deliver would
+# leave the seat with neither the daemon nor a Monitor.
+agmsg_claude_code_native_storage_ready() {
+  local cfg="${AGMSG_CONFIG:-${HOME:+$HOME/.agents/agmsg/config.json}}" q out
+  [ -n "$cfg" ] || return 1
+  [ -e "$cfg" ] || return 0
+  q="${cfg//\'/\'\'}"
+  out="$(sqlite3 :memory: "WITH c(j) AS (SELECT CAST(readfile('$q') AS TEXT))
+    SELECT CASE WHEN json_valid(j) AND json_type(j)='object'
+      THEN COALESCE(json_extract(j,'\$.storage'),'sqlite') ELSE '!' END FROM c" 2>/dev/null)" || return 1
+  [ "$out" = sqlite ]
+}

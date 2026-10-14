@@ -49,6 +49,10 @@ agmsg_session_start() {
   fi
   agmsg_daemon_read_state
   [ "${AGMSGD_HEALTH:-}" = ready ] || return 0
+  if ! agmsg_claude_code_native_storage_ready; then
+    echo "AGMSG delivery: agmsgd is running, but its Claude channel only reads the sqlite storage and this install's storage config is not usable for it, so the native channel is not used. Next: arm the Monitor below."
+    return 0
+  fi
 
   # Claim ONLY the single role this session is actually resuming as -- never
   # loop over every pair whose record happens to share this bare sid

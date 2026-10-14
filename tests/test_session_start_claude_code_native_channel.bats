@@ -162,6 +162,21 @@ _mark_daemon_ready() {
   [ "$(agmsg_role_session_uuid team alice)" = peer ]
 }
 
+# The daemon's Claude channel blocks any non-sqlite storage, so declaring the
+# native channel there would leave the seat with no delivery at all.
+@test "actas-claim: a non-sqlite storage config never declares delivery=native" {
+  _mark_daemon_ready
+  printf '{"storage":"jsonl"}\n' > "$BATS_TEST_TMPDIR/config.json"
+  run env AGMSG_CONFIG="$BATS_TEST_TMPDIR/config.json" AGMSG_AGENT_PID=$$ CLAUDE_CODE_MESSAGING_SOCKET="uds:/tmp/cc-socks/sid-jsonl.sock" \
+    bash "$SCRIPTS/actas-claim.sh" "$PROJ" claude-code alice "sid-jsonl"
+  [ "$status" -eq 0 ]
+  refute grep -qx "delivery=native" <<<"$output"
+  run env AGMSG_CONFIG="$BATS_TEST_TMPDIR/config.json" AGMSG_AGENT_PID=$$ AGMSG_RESOLVE_PROJECT=0 CLAUDE_CODE_MESSAGING_SOCKET="uds:/tmp/cc-socks/sid-jsonl.sock" \
+    bash "$SCRIPTS/session-start.sh" claude-code "$PROJ" <<< '{"session_id":"sid-jsonl"}'
+  grep -qF "AGMSG monitor mode" <<<"$output"
+  refute grep -q "agmsgd is running and will deliver" <<<"$output"
+}
+
 # A seat chosen by actas moves to direct delivery on the spot, even when the
 # project registers several seats (session-start alone cannot pick one then).
 @test "actas-claim: daemon ready and a messaging socket -> records the socket and prints delivery=native" {
