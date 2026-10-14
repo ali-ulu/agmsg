@@ -512,11 +512,15 @@ agmsg_role_session_publish_messaging() {   # <team> <agent> <socket> <config_dir
 
 # rc 0 only when agmsgd's Claude channel will accept this install's storage.
 # The answer comes from the daemon's own reader (storage-gate.mjs calls
-# readStorageDriver), so it follows the daemon's rules by construction.
-# Declaring the native channel when the daemon will refuse to deliver would
-# leave the seat with neither the daemon nor a Monitor; no node, or a failed
-# check, is "not ready".
+# readStorageDriver), run with the node the daemon itself runs on (the
+# node_path recorded at enable), not whatever node is first on PATH: an older
+# PATH node would fail the check while the daemon is fine. Declaring the
+# native channel when the daemon will refuse to deliver would leave the seat
+# with neither the daemon nor a Monitor; an unreadable node_path or a failed
+# check is "not ready".
 agmsg_claude_code_native_storage_ready() {
-  command -v node >/dev/null 2>&1 || return 1
-  node "${SKILL_DIR:-}/scripts/daemon/channels/storage-gate.mjs" >/dev/null 2>&1
+  local node_path
+  node_path="$(sqlite3 -readonly -cmd '.timeout 100' "${SKILL_DIR:-}/run/install.db" 'SELECT node_path FROM meta;' 2>/dev/null)" || return 1
+  [ -n "$node_path" ] && [ -x "$node_path" ] || return 1
+  "$node_path" "${SKILL_DIR:-}/scripts/daemon/channels/storage-gate.mjs" >/dev/null 2>&1
 }

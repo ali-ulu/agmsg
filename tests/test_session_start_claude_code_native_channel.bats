@@ -37,7 +37,7 @@ _mark_daemon_ready() {
     Linux) boot="$(sed -n 's/^btime //p' /proc/stat)" ;;
     *) skip 'POSIX beta executor evidence' ;;
   esac
-  sqlite3 "$RUN_DIR/install.db" "UPDATE daemon_intent SET desired='on';
+  sqlite3 "$RUN_DIR/install.db" "UPDATE meta SET node_path='$(command -v node)'; UPDATE daemon_intent SET desired='on';
     UPDATE daemon_owner SET state='ready', executor_pid=$$, executor_boot_id='$boot', executor_started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now');"
 }
 
@@ -180,6 +180,7 @@ _mark_daemon_ready() {
 # The gate asks the daemon's own config reader, so what the daemon refuses
 # (here a symlinked config) is refused here too.
 @test "native storage gate: a symlinked sqlite config is refused, as the daemon refuses it" {
+  _mark_daemon_ready
   source "$SCRIPTS/lib/role-session.sh"
   mkdir -p "$BATS_TEST_TMPDIR/cfg"
   printf '{"storage":"sqlite"}\n' > "$BATS_TEST_TMPDIR/cfg/real.json"
