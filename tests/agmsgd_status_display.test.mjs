@@ -83,6 +83,18 @@ test('installer restart guidance tells users to resume, refresh their destinatio
   assert.equal((source.match(/^agmsg_install_restart_guidance$/gm) ?? []).length, 1);
 });
 
+test('pending confirmations remain discoverable after a seat registration is removed', t => {
+  const { db, root, status } = fixture(t);
+  db.prepare("INSERT INTO beta_codex_queue (seat,codex_home,thread,up_to,nonce,state,children,created_at) VALUES (?, ?, ?, '{}', 'removed-pending', 'pending', 'incomplete', '2020-01-01T00:00:00Z')")
+    .run(JSON.stringify(['test', 'removed']), root, thread);
+  const summary = status();
+  assert.match(summary, /Pending confirmations for unregistered seats: 1.*--all/);
+  assert.doesNotMatch(summary, /Codex test\/removed:/);
+  assert.match(status('--all'), /Codex test\/removed: unregistered; past destination; confirmation pending since 2020-01-01T00:00:00Z/);
+  assert.equal(JSON.parse(status('--json')).codex_pending.length, 1);
+  assert.equal(db.prepare('SELECT state FROM beta_codex_queue').get().state, 'pending');
+});
+
 test('status suppresses managed SQLite experimental notices but retains ordinary warnings', t => {
   const { root } = fixture(t);
   const entry = join(root, 'scripts/daemon/status.mjs');
