@@ -50,6 +50,12 @@ _require_install_db() {
     echo "agmsg daemon: run/install.db does not exist -- run install.sh first" >&2
     exit 1
   fi
+  # An install.db made by an older install.sh lacks meta's node columns and the
+  # daemon tables; bring it up to schema.sql before any command reads it.
+  agmsg_install_db_apply_schema "$INSTALL_DB" "$SCRIPT_DIR/daemon/schema.sql" || {
+    echo "agmsg daemon: could not bring run/install.db up to date" >&2
+    exit 1
+  }
 }
 
 # Runs $1 (one or more SQL statements against install.db's tables,
@@ -606,12 +612,6 @@ cmd_enable() {
   if [ -z "$codex_path" ]; then
     echo 'agmsg daemon enable: no usable Codex executable found; Codex seats stay blocked until enabled again with Codex available.' >&2
   fi
-  # An install.db made by an older install.sh lacks meta's node columns and the
-  # daemon tables; bring it up to schema.sql before writing to them.
-  agmsg_install_db_apply_schema "$INSTALL_DB" "$SCRIPT_DIR/daemon/schema.sql" || {
-    echo "agmsg daemon enable: could not bring run/install.db up to date" >&2
-    return 1
-  }
   _with_op_lock "
     UPDATE meta SET node_path = '$(printf '%s' "$node_path" | sed "s/'/''/g")', node_version = '$node_version', codex_path = '$(printf '%s' "$codex_path" | sed "s/'/''/g")';
     UPDATE daemon_intent SET desired = 'on';
