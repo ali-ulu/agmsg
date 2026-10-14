@@ -177,6 +177,29 @@ _mark_daemon_ready() {
   refute grep -q "agmsgd is running and will deliver" <<<"$output"
 }
 
+# The gate must agree with the daemon's reader on what it refuses: a symlink,
+# a parent it cannot search, malformed JSON; only a true ENOENT is the default.
+@test "native storage gate: agrees with the daemon on missing, symlink, unsearchable parent and malformed config" {
+  source "$SCRIPTS/lib/role-session.sh"
+  local d="$BATS_TEST_TMPDIR/cfg"
+  mkdir -p "$d/ok" "$d/locked"
+  printf '{"storage":"sqlite"}\n' > "$d/ok/config.json"
+  printf '{"storage":"sqlite"}\n' > "$d/locked/config.json"
+  ln -s "$d/ok/config.json" "$d/link.json"
+  printf '{oops\n' > "$d/bad.json"
+  AGMSG_CONFIG="$d/ok/config.json" agmsg_claude_code_native_storage_ready
+  AGMSG_CONFIG="$d/ok/missing.json" agmsg_claude_code_native_storage_ready
+  chmod 000 "$d/locked"
+  local rc_locked=0 rc_link=0 rc_bad=0
+  AGMSG_CONFIG="$d/locked/config.json" agmsg_claude_code_native_storage_ready || rc_locked=$?
+  AGMSG_CONFIG="$d/link.json" agmsg_claude_code_native_storage_ready || rc_link=$?
+  AGMSG_CONFIG="$d/bad.json" agmsg_claude_code_native_storage_ready || rc_bad=$?
+  chmod 755 "$d/locked"
+  [ "$rc_locked" -ne 0 ]
+  [ "$rc_link" -ne 0 ]
+  [ "$rc_bad" -ne 0 ]
+}
+
 # A seat chosen by actas moves to direct delivery on the spot, even when the
 # project registers several seats (session-start alone cannot pick one then).
 @test "actas-claim: daemon ready and a messaging socket -> records the socket and prints delivery=native" {

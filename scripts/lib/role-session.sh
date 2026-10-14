@@ -519,7 +519,15 @@ agmsg_role_session_publish_messaging() {   # <team> <agent> <socket> <config_dir
 agmsg_claude_code_native_storage_ready() {
   local cfg="${AGMSG_CONFIG:-${HOME:+$HOME/.agents/agmsg/config.json}}" q out
   [ -n "$cfg" ] || return 1
-  [ -e "$cfg" ] || return 0
+  # The daemon lstat()s the file: a symlink or non-regular file is refused,
+  # only a true ENOENT is "missing", and a parent it cannot search is an error.
+  [ ! -L "$cfg" ] || return 1
+  if [ ! -f "$cfg" ]; then
+    [ ! -e "$cfg" ] || return 1
+    local parent="${cfg%/*}"
+    [ -z "$parent" ] || [ ! -d "$parent" ] || [ -x "$parent" ] || return 1
+    return 0
+  fi
   q="${cfg//\'/\'\'}"
   out="$(sqlite3 :memory: "WITH c(j) AS (SELECT CAST(readfile('$q') AS TEXT))
     SELECT CASE WHEN json_valid(j) AND json_type(j)='object'
