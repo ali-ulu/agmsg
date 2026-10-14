@@ -112,7 +112,9 @@ agmsg_daemon_seat_report() {
         *) display="$record_status" ;;
       esac
       if [ "$driver" != sqlite ]; then
-        display="$display; $driver storage needs the bridge. Disable agmsgd before reopening this seat"
+        local storage_label="$driver"
+        [ "$driver" != jsonl ] || storage_label=JSONL
+        display="$display; $storage_label storage needs the bridge. Disable agmsgd before reopening this seat"
       fi
       if [ "$action" != status ]; then
         echo "$label: $display"

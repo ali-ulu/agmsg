@@ -559,7 +559,7 @@ cmd_status() {
     health_rc=1
   fi
   if [ "$json" = true ]; then
-    sqlite3 "$INSTALL_DB" "SELECT json_object('state',state,'intent',(SELECT desired FROM daemon_intent),'health','$AGMSGD_HEALTH','detail','no usable Node') FROM daemon_owner;"
+    sqlite3 "$INSTALL_DB" "SELECT json_object('state',state,'intent',(SELECT desired FROM daemon_intent),'health','${AGMSGD_HEALTH:-unknown}','detail','no usable Node') FROM daemon_owner;"
     return "$health_rc"
   fi
   # K14 fallback: no usable Node at all -- a minimal, honest read straight
