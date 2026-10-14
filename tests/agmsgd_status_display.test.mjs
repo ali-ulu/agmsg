@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+import { openInstallDb } from '../scripts/daemon/db.mjs';
+import { ensureCodexChannelSchema } from '../scripts/daemon/channels/codex-queue-store.mjs';
+
+const repo = fileURLToPath(new URL('../', import.meta.url));
+const thread = '01a101a5-3599-7d62-a149-4c8182bcf007';
+function fixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'daemon-status-display-'));
+  cpSync(join(repo, 'scripts'), join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'run'));
+  mkdirSync(join(root, 'teams/test'), { recursive: true });
+  const db = openInstallDb(join(root, 'run/install.db'));
+  ensureCodexChannelSchema(db);
+  t.after(() => db.close());
+  const config = { name: 'test', agents: { alice: { registrations: [
+    { type: 'codex', project: '/first' }, { type: 'codex', project: '/second' },
+  ] } } };
+  writeFileSync(join(root, 'teams/test/config.json'), JSON.stringify(config));
+  writeFileSync(join(root, 'run/role-session.test__alice'), `type=codex\nsession=${thread}\ncodex_home=${root}\nupdated_at=${new Date().toISOString()}\n`);
+  // Read-only liveness evidence points at this test process, never a real seat.
+  writeFileSync(join(root, 'run/codex-bridge.test.alice.pid'), `${process.pid}\n`);
+  writeFileSync(join(root, 'run/codex-bridge.test.alice.meta'), `pid=${process.pid}\ntype=codex\nproject=/second\n`);
+  const status = (...flags) => execFileSync('bash', [join(root, 'scripts/daemon.sh'), 'status', ...flags], {
+    encoding: 'utf8', env: { ...process.env, AGMSG_CONFIG: join(root, 'config.json') },
+  });
+  return { root, db, config, status };
+}
+
+test('daemon status defaults to readable text and emits only JSON with --json', t => {
+  const { status } = fixture(t);
+  const text = status();
+  assert.match(text, /agmsgd has never been started/);
+  assert.doesNotMatch(text, /"exitCode"|"codex_seats"/);
+  const json = JSON.parse(status('--json'));
+  assert.equal(json.exitCode, 0);
+  assert.equal(json.codex_seats.state, 'ok');
+});
+
+test('multiple project registrations produce one seat line', t => {
+  const { status } = fixture(t);
+  assert.equal(status().split('\n').filter(line => line.startsWith('Codex test/alice:')).length, 1);
+});
+
+test('bridge display uses every registered project and does not repeat a contradictory cached verdict', t => {
+  const { db, status } = fixture(t);
+  db.prepare('INSERT INTO beta_codex_seat VALUES (?, ?, ?, ?, ?, ?)').run(JSON.stringify(['test', 'alice']), thread, '/profile', 'blocked', 'bridge_state_unknown', new Date().toISOString());
+  const text = status();
+  assert.match(text, /bridge process running/);
+  assert.doesNotMatch(text, /bridge.*unknown|bridge could not be verified/);
+});
+
+test('old destinations are counted by default and available with --all after current seats', t => {
+  const { root, db, config, status } = fixture(t);
+  config.agents.ancient = { registrations: [{ type: 'codex', project: '/old' }] };
+  writeFileSync(join(root, 'teams/test/config.json'), JSON.stringify(config));
+  writeFileSync(join(root, 'run/role-session.test__ancient'), 'updated_at=2020-01-01T00:00:00Z\n');
+  const text = status();
+  assert.doesNotMatch(text, /Codex test\/ancient:/);
+  assert.match(text, /1 older destination records hidden.*--all/);
+  const all = status('--all');
+  assert.match(all, /Codex test\/ancient:/);
+  assert.ok(all.indexOf('Codex test/alice:') < all.indexOf('Codex test/ancient:'));
+  db.prepare("INSERT INTO beta_codex_queue (seat,codex_home,thread,up_to,nonce,state,children,created_at) VALUES (?, ?, ?, '{}', 'old-pending', 'pending', 'incomplete', '2020-01-01T00:00:00Z')")
+    .run(JSON.stringify(['test', 'ancient']), root, thread);
+  assert.match(status(), /Codex test\/ancient:.*waiting for delivery confirmation/);
+});
+
+test('installer restart guidance tells users to resume, refresh their destination, and check status', () => {
+  const source = readFileSync(join(repo, 'install.sh'), 'utf8');
+  const fn = source.match(/agmsg_install_restart_guidance\(\) \{[\s\S]*?\n\}/)[0];
+  const output = execFileSync('bash', ['-c', `${fn}\nSKILL_DIR=/tmp/isolated-install\nagmsg_install_restart_guidance`], { encoding: 'utf8' });
+  assert.match(output, /close and reopen/);
+  assert.match(output, /Resume the same conversation.*actas/);
+  assert.match(output, /\/tmp\/isolated-install\/scripts\/agmsg daemon status/);
+  assert.match(output, /does not enable agmsgd/);
+  assert.equal((source.match(/^  agmsg_install_restart_guidance$/gm) ?? []).length, 1);
+  assert.equal((source.match(/^agmsg_install_restart_guidance$/gm) ?? []).length, 1);
+});

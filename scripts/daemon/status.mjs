@@ -15,7 +15,7 @@
 //     that says ready but a socket that refuses the connection is the
 //     "ready, but does not connect" case, which only an
 //     external prober (not the daemon answering about itself) can ever
-//     observe. Prints one JSON line to stdout; exit code follows the
+//     observe. Prints human-readable text, or JSON with --json; exit code follows the
 //     table's own exit column.
 
 import { existsSync, realpathSync } from "node:fs";
@@ -174,6 +174,8 @@ function probeSocket(socketPath, timeoutMs = 2000) {
 
 async function main() {
   const installRoot = process.argv[2];
+  const json = process.argv.slice(3).includes("--json");
+  const all = process.argv.slice(3).includes("--all");
   if (!installRoot) {
     process.stderr.write("usage: status.mjs <installRoot>\n");
     process.exit(2);
@@ -205,9 +207,25 @@ async function main() {
   // unbuffered) looked completely fine. Setting exitCode and letting the
   // event loop drain naturally waits for the flush first.
   process.stdout.write(
-    `${JSON.stringify({ ...result, codex_seats: codexSeats, claude_code_seats: claudeCodeSeats, node_sqlite_experimental: true, node_version: process.version })}\n`,
+    json ? `${JSON.stringify({ ...result, codex_seats: codexSeats, claude_code_seats: claudeCodeSeats, node_sqlite_experimental: true, node_version: process.version })}\n` : `${result.text}\n${formatClaudeSeats(claudeCodeSeats, all)}`,
   );
   process.exitCode = result.exitCode;
+}
+
+function formatClaudeSeats(inventory, all) {
+  let omitted = 0;
+  const lines = [];
+  for (const seat of inventory?.seats ?? []) {
+    if (!all && (seat.state === "unaddressable" || !seat.messaging_socket)) {
+      omitted += 1;
+      continue;
+    }
+    let label;
+    try { label = JSON.parse(seat.seat).join("/"); } catch { label = "unidentified seat"; }
+    lines.push(`Claude Code ${label}: last daemon observation: ${seat.state}${seat.reason ? ` (${seat.reason})` : ""}`);
+  }
+  if (omitted) lines.push(`Claude Code seats: ${omitted} unavailable destination records hidden. View them with: agmsg daemon status --all`);
+  return lines.length ? `${lines.join("\n")}\n` : "";
 }
 
 // `fileURLToPath(import.meta.url)` is realpath'd by Node's own module
