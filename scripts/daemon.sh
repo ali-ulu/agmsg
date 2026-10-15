@@ -23,6 +23,8 @@ source "$SCRIPT_DIR/lib/storage.sh"
 source "$SCRIPT_DIR/lib/daemon-seats.sh"
 # shellcheck source=lib/install-db.sh
 source "$SCRIPT_DIR/lib/install-db.sh"
+# shellcheck source=lib/sqlpath.sh
+source "$SCRIPT_DIR/lib/sqlpath.sh"
 
 _path_hint() {
   printf 'If agmsg is not found, use "%s/scripts/agmsg" daemon %s.\n' "$SKILL_DIR" "$1"
@@ -81,7 +83,7 @@ _ensure_install_db_schema() {
 _install_generation() {
   local install_id manifest_path_sql manifest_id manifest_gen
   install_id="$(sqlite3 "$INSTALL_DB" "SELECT install_id FROM meta;" 2>/dev/null)" || return 1
-  manifest_path_sql="$(printf '%s' "$SKILL_DIR/run/install-manifest.json" | sed "s/'/''/g")"
+  manifest_path_sql="$(agmsg_sql_readfile_path "$SKILL_DIR/run/install-manifest.json")"
   IFS='|' read -r manifest_id manifest_gen < <(sqlite3 :memory: "SELECT json_extract(CAST(readfile('$manifest_path_sql') AS TEXT), '\$.install_id') || '|' || json_extract(CAST(readfile('$manifest_path_sql') AS TEXT), '\$.gen');" 2>/dev/null) || return 1
   [ -n "$install_id" ] && [ "$manifest_id" = "$install_id" ] && [ -n "$manifest_gen" ] || return 1
   printf '%s:%s' "$install_id" "$manifest_gen"
@@ -96,7 +98,7 @@ _with_op_lock() {
   local AGMSGD_LOCK_INSTALL_ID
   shift
   expected_generation="$(_install_generation)" || {
-    echo "agmsg daemon: cannot read a complete install generation" >&2
+    echo "agmsg daemon: could not read this install's record (run/install-manifest.json does not match run/install.db, or one of them cannot be read). Run agmsg install --update, then try again." >&2
     return 1
   }
   AGMSGD_LOCK_INSTALL_ID="${expected_generation%%:*}"
@@ -106,7 +108,7 @@ _with_op_lock() {
   lock_pid=$!
   exec 8> "$lock_dir/in"
   exec 9< "$lock_dir/out"
-  attach_path="$(printf '%s' "$INSTALL_DB" | sed "s/'/''/g")"
+  attach_path="$(agmsg_sql_readfile_path "$INSTALL_DB")"
   printf '%s\n' '.bail on' "ATTACH DATABASE '$attach_path' AS installdb;" 'BEGIN EXCLUSIVE;' '.print LOCKED' >&8
   if ! IFS= read -r -t 10 ready <&9 || [ "$ready" != "LOCKED" ]; then
     printf 'ROLLBACK;\n.quit\n' >&8 2>/dev/null || true
@@ -119,7 +121,7 @@ _with_op_lock() {
     return 1
   fi
   local generation_row generation_marker manifest_sql
-  manifest_sql="$(printf '%s' "$SKILL_DIR/run/install-manifest.json" | sed "s/'/''/g")"
+  manifest_sql="$(agmsg_sql_readfile_path "$SKILL_DIR/run/install-manifest.json")"
   printf '%s\n' "SELECT CASE WHEN json_extract(CAST(readfile('$manifest_sql') AS TEXT), '\$.install_id') = (SELECT install_id FROM installdb.meta) THEN (SELECT install_id FROM installdb.meta) || ':' || json_extract(CAST(readfile('$manifest_sql') AS TEXT), '\$.gen') ELSE '' END;" '.print GENERATION_END' >&8
   IFS= read -r -t 10 generation_row <&9 || generation_row=""
   IFS= read -r -t 10 generation_marker <&9 || generation_marker=""
