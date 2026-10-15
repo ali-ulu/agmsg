@@ -60,6 +60,23 @@ test('observeTranscript: a queue-operation enqueue line is not delivery evidence
   assert.equal(observation.state, 'delivered');
   resolved = resolvePendingDelivery({ observation });
   assert.equal(resolved.state, 'confirmed');
+
+  // Absorbed mid-turn: enqueue, remove, then a queued_command attachment and
+  // no user line at all. The model read it, so it is delivered.
+  writeFileSync(transcriptPath, `${JSON.stringify({
+    type: 'queue-operation',
+    operation: 'enqueue',
+    content: `<cross-session-message from="agmsgd">${marker}</cross-session-message>`,
+  })}\n${JSON.stringify({
+    type: 'queue-operation',
+    operation: 'remove',
+    reason: 'absorbed_mid_turn',
+    content: `<cross-session-message from="agmsgd">${marker}</cross-session-message>`,
+  })}\n${JSON.stringify({
+    type: 'attachment',
+    attachment: { type: 'queued_command', prompt: `<cross-session-message from="agmsgd">${marker}</cross-session-message>` },
+  })}\n`);
+  assert.equal(observeTranscript(transcriptPath, nonce).state, 'delivered');
 });
 
 // No clock decides a pending nudge: whatever the transcript shows (or fails to
