@@ -110,14 +110,7 @@ _with_op_lock_run() {
   local AGMSGD_LOCK_INSTALL_ID
   shift
   expected_generation="$(_install_generation)" || {
-    local ver reinstall
-    ver="$(tr -d '[:space:]' < "$SKILL_DIR/VERSION" 2>/dev/null || true)"
-    ver="${ver#v}"
-    case "$ver" in
-      [0-9]*) reinstall="npx agmsg@$ver install" ;;
-      *) reinstall="npx agmsg install" ;;
-    esac
-    echo "agmsg daemon: could not read this install's record (run/install-manifest.json does not match run/install.db, or one of them cannot be read). Reinstall this version to repair it with: $reinstall (or bash <path to a checkout>/install.sh), then try again. If install stops with an unfinished-operation notice or says several installs were found, follow the command it prints." >&2
+    echo "agmsg daemon: could not read this install's record (run/install-manifest.json does not match run/install.db, or one of them cannot be read). Repair it with: npx agmsg@next install --update (add --cmd <name> if this is a named install or several installs exist), then try again." >&2
     return 1
   }
   AGMSGD_LOCK_INSTALL_ID="${expected_generation%%:*}"
