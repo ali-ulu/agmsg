@@ -523,8 +523,16 @@ cmd_start() {
     record_node_sql="UPDATE meta SET node_path = '$(printf '%s' "$found_node" | sed "s/'/''/g")', node_version = '$found_version';"
   fi
 
+  # An install enabled by an earlier version (or updated before Codex was on
+  # PATH) can hold an empty meta.codex_path, which blocks every Codex seat:
+  # fill it from the current PATH, never overwriting a path already there.
+  local codex_fill="" codex_path
+  codex_path="$(_resolve_codex 2>/dev/null || true)"
+  if [ -n "$codex_path" ]; then
+    codex_fill="UPDATE meta SET codex_path = '$(printf '%s' "$codex_path" | sed "s/'/''/g")' WHERE COALESCE(codex_path, '') = '';"
+  fi
   local new_op_gen
-  _with_op_lock "$record_node_sql UPDATE daemon_intent SET desired = 'on', op_gen = op_gen + 1, set_by = 'start', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');"
+  _with_op_lock "$record_node_sql $codex_fill UPDATE daemon_intent SET desired = 'on', op_gen = op_gen + 1, set_by = 'start', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');"
   new_op_gen="$(sqlite3 "$INSTALL_DB" "SELECT op_gen FROM daemon_intent;")"
   if _service_registered; then
     if ! _start_registered_service; then
