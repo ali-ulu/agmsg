@@ -436,6 +436,27 @@ EOF
   [ ! -e "$unit" ]
 }
 
+@test "daemon.sh disable: only touches the intent and service its own step owns" {
+  _seed_install_db
+  _write_completion_record
+  local db="$TEST_SKILL_DIR/run/install.db" fns="$SCRIPTS/daemon-fns.sh"
+  # daemon.sh without its trailing dispatch, so the steps can be overridden.
+  awk '/^case "\$\{1:-\}" in/ {exit} {print}' "$DAEMON" > "$fns"
+  # (a) already off, and unregistering fails: the intent must stay off.
+  sqlite3 "$db" "UPDATE daemon_intent SET desired='off';"
+  run bash -c 'set -u; source "$1"; _unregister() { return 1; }; cmd_disable' _ "$fns"
+  [ "$status" -ne 0 ]
+  [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "off" ]
+  # (b) a newer enable lands while disable waits: its service is left alone.
+  sqlite3 "$db" "UPDATE daemon_intent SET desired='on';"
+  DB="$db" run bash -c 'set -u; source "$1"; _unregister() { echo unregistered >> "$2"; }
+    _wait_owner_none() { sqlite3 "$DB" "UPDATE daemon_intent SET desired='"'"'on'"'"', op_gen = op_gen + 1;"; printf none; }
+    cmd_disable' _ "$fns" "$TEST_SKILL_DIR/unregistered"
+  [ "$status" -ne 0 ]
+  [ ! -e "$TEST_SKILL_DIR/unregistered" ]
+  [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "on" ]
+}
+
 @test "daemon.sh Windows registration writes the declared UTF-16 task XML" {
   _seed_install_db
   _write_completion_record
