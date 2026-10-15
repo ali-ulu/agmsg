@@ -273,13 +273,13 @@ _register_linux() {
   cat > "$unit_path" <<EOF
 [Unit]
 Description=agmsgd ($SKILL_DIR)
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 ExecStart=$LAUNCHER
 Restart=on-failure
 RestartSec=30s
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 [Install]
 WantedBy=default.target
@@ -637,12 +637,8 @@ cmd_enable() {
   cmd_start
 }
 
-cmd_disable() {
-  _ensure_install_db_schema
-  _with_op_lock "UPDATE daemon_intent SET desired = 'off', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" _unregister
-  local socket
-  socket="$(sqlite3 "$INSTALL_DB" "SELECT socket FROM daemon_owner WHERE state = 'ready';" 2>/dev/null || true)"
-  _request_stop_over_socket "$socket"
+# Reads daemon_owner.state, waiting up to ~10s for it to become "none".
+_wait_owner_none() {
   local waited=0 state
   while [ "$waited" -lt 100 ]; do
     state="$(sqlite3 "$INSTALL_DB" "SELECT state FROM daemon_owner;" 2>/dev/null || true)"
@@ -650,6 +646,30 @@ cmd_disable() {
     waited=$((waited + 1))
     sleep 0.1
   done
+  printf '%s' "$state"
+}
+
+cmd_disable() {
+  _ensure_install_db_schema
+  # The daemon writes stopping -> none into install.db on its way out, so it
+  # must stop while no operation holds that database: commit the intent and
+  # release the lock first, let the daemon finish, and only then unregister
+  # the service under the lock. Stopping the service from inside the lock
+  # made the dying daemon fail with "database is locked" and left the record
+  # at ready.
+  _with_op_lock "UPDATE daemon_intent SET desired = 'off', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" || return 1
+  local socket state
+  socket="$(sqlite3 "$INSTALL_DB" "SELECT socket FROM daemon_owner WHERE state = 'ready';" 2>/dev/null || true)"
+  _request_stop_over_socket "$socket"
+  state="$(_wait_owner_none)"
+  if ! _with_op_lock "" _unregister; then
+    # Keep the registration and the intent together, as before this ordering.
+    _with_op_lock "UPDATE daemon_intent SET desired = 'on', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" || true
+    return 1
+  fi
+  if [ "$state" != "none" ]; then
+    state="$(_wait_owner_none)"
+  fi
   if [ "$state" != "none" ]; then
     # A record written by an older version cannot be checked against this
     # boot. Disable is the deliberate way out of it: the daemon was asked to

@@ -398,6 +398,44 @@ EOF
   grep -q '^locked bootout$' "$events"
 }
 
+@test "daemon.sh disable: a running daemon is stopped before the service is unregistered, so its record returns to none" {
+  _seed_install_db
+  _write_completion_record
+  _run_with_deadline 15 bash "$DAEMON" start
+  [ "$status" -eq 0 ]
+  mkdir -p "$TEST_SKILL_DIR/fake-linux"
+  printf '#!/usr/bin/env bash\necho Linux\n' > "$TEST_SKILL_DIR/fake-linux/uname"
+  # Like systemd, "disable --now" terminates the daemon and waits for it to go.
+  # The pid is read now: install.db cannot be read while disable holds the lock.
+  local daemon_pid
+  daemon_pid="$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT executor_pid FROM daemon_owner;")"
+  [ -n "$daemon_pid" ]
+  cat > "$TEST_SKILL_DIR/fake-linux/systemctl" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  disable)
+    pid=$daemon_pid
+    if kill -0 "\$pid" 2>/dev/null; then
+      kill -TERM "\$pid"
+      for _ in \$(seq 1 150); do kill -0 "\$pid" 2>/dev/null || break; sleep 0.1; done
+    fi ;;
+esac
+exit 0
+EOF
+  chmod +x "$TEST_SKILL_DIR/fake-linux/uname" "$TEST_SKILL_DIR/fake-linux/systemctl"
+  local unit_id unit
+  unit_id="$(printf '%s:%s' "$TEST_SKILL_DIR" daemon-sh-test | shasum -a 256 | cut -c1-12)"
+  unit="$HOME/.config/systemd/user/agmsgd-$unit_id.service"
+  mkdir -p "$(dirname "$unit")"
+  : > "$unit"
+
+  PATH="$TEST_SKILL_DIR/fake-linux:$PATH" AGMSGD_SYSTEMCTL="$TEST_SKILL_DIR/fake-linux/systemctl" \
+    _run_with_deadline 40 bash "$DAEMON" disable
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT state FROM daemon_owner;")" = "none" ]
+  [ ! -e "$unit" ]
+}
+
 @test "daemon.sh Windows registration writes the declared UTF-16 task XML" {
   _seed_install_db
   _write_completion_record
