@@ -169,12 +169,16 @@ export function createClaudeCodeQueueChannel({
       // The nudge is out of date when its socket is gone, or the seat's record
       // now names another socket or session (/compact, restart, --resume).
       // Nothing else makes it stale: not the time that has passed.
-      const socketGone = socketAlive(pending.messaging_socket).state !== "ok";
+      // Only a socket that is plainly absent counts as gone. A check that merely
+      // could not run (stat failed, wrong owner) proves nothing about the nudge
+      // the seat still holds, and sending another would duplicate it.
+      const socketCheck = socketAlive(pending.messaging_socket);
+      const socketGone = socketCheck.reason === "messaging_socket_missing";
       const recordMoved = record && (
         record.messaging_socket !== pending.messaging_socket ||
         (transcriptNow && transcriptNow !== pending.transcript_path));
       if (!socketGone && !recordMoved) {
-        saveSeat(db, { seat, messagingSocket: pending.messaging_socket, state: "addressable", reason: observation.reason }, now);
+        saveSeat(db, { seat, messagingSocket: pending.messaging_socket, state: "addressable", reason: socketCheck.state === "ok" ? observation.reason : socketCheck.reason }, now);
         return;
       }
       setQueueState(db, pending.id, "expired");

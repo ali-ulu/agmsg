@@ -84,7 +84,7 @@ function channelFixture(t) {
   ensureClaudeCodeChannelSchema(db);
   db.exec("UPDATE daemon_intent SET desired='on', op_gen=1");
   t.after(() => db.close());
-  const state = { session: 'sess-1', socket: '/tmp/cc-socks/1.sock', sent: 0, hours: 0 };
+  const state = { session: 'sess-1', socket: '/tmp/cc-socks/1.sock', sent: 0, hours: 0, alive: { state: 'ok' } };
   const channel = createClaudeCodeQueueChannel({
     db, installRoot: root, expectedOpGen: 1, env: { AGMSG_STORAGE_PATH: root },
     now: () => Date.UTC(2026, 9, 14) + state.hours * 3_600_000,
@@ -96,7 +96,7 @@ function channelFixture(t) {
     readSnapshot: () => ({ state: 'ok', unread: true, upTo: '{}' }),
     send: async () => { state.sent += 1; return { state: 'sent' }; },
     observe: () => ({ state: 'absent' }),
-    socketAlive: () => ({ state: 'ok' }),
+    socketAlive: () => state.alive,
     hostPlatform: 'linux',
   });
   return { db, channel, state };
@@ -109,6 +109,9 @@ test('an unconfirmed nudge is not sent again, however long the same session and 
     state.hours = hours;
     await channel.pollOnce();
   }
+  // A check that could not run is not evidence the socket is gone.
+  state.alive = { state: 'unreadable', reason: 'messaging_socket_stat_failed' };
+  await channel.pollOnce();
   assert.equal(state.sent, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM beta_claude_queue WHERE state='pending'").get().n, 1);
   await channel.stop();
