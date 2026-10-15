@@ -1298,6 +1298,21 @@ _flat_screen() {
   [ "$status" -eq 14 ]
   [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
 
+  # Codex, the counterexample a review round found (#1394): a transcript
+  # line merely MENTIONING both of the typing footer's two key phrases in
+  # prose, never the real footer's own shape (not indented the way the
+  # real footer is, and not ending the line in a percentage). Matching
+  # just "contains these two substrings somewhere" (an earlier version of
+  # this fix) accepted this as the live widget; the anchored pattern must
+  # not. Refuses by NOT finding the box at all (15), the same as any other
+  # stale/decorative "›" with nothing live behind it -- never reaches a
+  # real-draft classification on prose that was never the footer.
+  : > "$ARGV_LOG"
+  _install_fake_herdr_screen_sequence "$(printf '›\n\nA message quoted "tab to queue" and "context left" as examples.\n')"
+  run bash "$SCRIPTS/poke.sh" testteam codex1 "hello"
+  [ "$status" -eq 15 ]
+  [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
+
   # Codex, stale/off-screen marker on BOTH reads: a blank "›" with blank
   # lines after it and NO footer at all -- the exact shape the previous
   # "near the bottom" guess accepted as empty, because proximity alone

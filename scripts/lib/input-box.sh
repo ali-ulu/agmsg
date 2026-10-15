@@ -221,14 +221,29 @@ _agmsg_input_box_raw_boxed() {
 #     tab to queue message                            100% context left
 # Both forms are accepted as proof of the live widget -- the ORIGINAL
 # purpose (#1321: refuse a stale "›" with nothing live behind it) only
-# needs SOME specific, non-decorative footer text, not that specific text;
-# matching on BOTH "tab to queue" and "context left" together (not either
-# alone) keeps this as narrow a signature as the idle footer's "·" already
-# is, rather than opening the door to a shorter substring a quoted
-# transcript line could plausibly contain. Located on the
-# STYLE-STRIPPED derived copy, same reason as the boxed check above;
-# without either form, refuse. Echoes the marker line's own raw content
-# (single line), styling intact.
+# needs SOME specific, non-decorative footer text, not that specific text.
+#
+# Matching just the substrings "tab to queue" and "context left" anywhere
+# in the line was tried and rejected on review (#1394): a quoted transcript
+# line that merely MENTIONS both phrases in prose -- e.g. `A message quoted
+# "tab to queue" and "context left" as examples.` -- passed it too, which
+# is exactly the kind of decorative/quoted text this whole function exists
+# to refuse. The MEASURED footer's actual SHAPE is what is anchored
+# instead: it (past any leading padding -- the live capture left-indents
+# this line, unlike the phrase embedded mid-sentence) starts with the
+# literal phrase "tab to queue message" and ENDS the line with a
+# percentage ("<digits>% context left") -- a sentence merely discussing
+# the phrase does not have it start and end the line this way. Glob `*`
+# matches ZERO OR MORE of anything, but `[[:space:]]*` is a single
+# required whitespace char followed by that -- there is no "zero or more
+# of a class" repetition in a plain case pattern, which is why the leading
+# padding is required-at-least-one rather than optional (measured padding
+# is never actually zero) and why no symmetric trailing one is attempted:
+# it would have the same one-or-more shape, wrongly refusing a real footer
+# with no trailing padding at all.
+# Located on the STYLE-STRIPPED derived copy, same reason as the boxed
+# check above; without either form, refuse. Echoes the marker line's own
+# raw content (single line), styling intact.
 _agmsg_input_box_raw_flat() {
   local marker="$1" screen="$2"
   local -a lines=() plain=()
@@ -261,7 +276,7 @@ _agmsg_input_box_raw_flat() {
     *[![:space:]]*) return 1 ;;
   esac
   case "${plain[$footer_idx]}" in
-    *·*|*'tab to queue'*'context left'*) ;;
+    *·*|[[:space:]]*'tab to queue message'*[0-9]'% context left') ;;
     *) return 1 ;;
   esac
 
