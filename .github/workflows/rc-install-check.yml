@@ -35,7 +35,7 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
         run: |
           S="$HOME/.agents/skills/agmsg/scripts"
-          REPO="$WORK"
+          REPO="$PWD"
           WORK="$RUNNER_TEMP/work"; mkdir -p "$WORK/other"
           command -v sqlite3 || echo "sqlite3 NOT on PATH"
           step() { echo; echo "::group::$*"; echo "\$ $*"; "$@"; echo "[exit=$?]"; echo "::endgroup::"; }
