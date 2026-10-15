@@ -48,13 +48,13 @@ jobs:
           case "$SCENARIO" in
             fresh-rc1)
               cd "$WORK"
-              show npx --yes agmsg@1.6.0-rc.1 install
+              show npx --yes agmsg@1.6.0-rc.2 install
               ;;
             update-from-153)
               cd "$WORK"
               show npx --yes agmsg@1.5.3 install
               show bash "$S/join.sh" ci seat1 claude-code "$WORK"
-              show npx --yes agmsg@1.6.0-rc.1 install --update
+              show npx --yes agmsg@1.6.0-rc.2 install --update
               ;;
             fresh-head)
               show bash "$REPO/install.sh"
@@ -62,7 +62,7 @@ jobs:
               ;;
           esac
           echo; echo "=== version ==="; show bash "$S/version.sh"
-          run_agmsg() { if [ "$SCENARIO" = fresh-head ]; then show bash "$S/agmsg" "$@"; else show npx --yes agmsg@1.6.0-rc.1 "$@"; fi; }
+          run_agmsg() { if [ "$SCENARIO" = fresh-head ]; then show bash "$S/agmsg" "$@"; else show npx --yes agmsg@1.6.0-rc.2 "$@"; fi; }
           echo; echo "=== launcher on PATH? ==="; command -v agmsg || echo "agmsg not on PATH"
           run_agmsg daemon enable
           run_agmsg daemon status
