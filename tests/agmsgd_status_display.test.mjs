@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -31,6 +31,62 @@ function fixture(t) {
   });
   return { root, db, config, status };
 }
+
+function codexStartupFixture(t, names) {
+  const setup = fixture(t);
+  const { root, config } = setup;
+  const profile = join(root, 'profile');
+  mkdirSync(profile);
+  config.agents = Object.fromEntries(names.map(name => [name, { registrations: [{ type: 'codex', project: root }] }]));
+  writeFileSync(join(root, 'teams/test/config.json'), JSON.stringify(config));
+  unlinkSync(join(root, 'run/codex-bridge.test.alice.pid'));
+  const old = name => `team=test\nagent=${name}\ntype=codex\nproject=${root}\nsession=${thread}\ncodex_home=${root}\n`;
+  for (const name of names) writeFileSync(join(root, `run/role-session.test__${name}`), old(name));
+  const env = { ...process.env, CODEX_HOME: profile, AGMSG_SELF_NAME: 'off', AGMSG_AGENT_PID: String(process.pid),
+    AGMSG_CONFIG: join(root, 'config.json'), AGMSG_STORAGE_PATH: root,
+    AGMSG_CODEX_BRIDGE_LAUNCHER: '1', AGMSG_CODEX_SEAT_KEY: 'invalid!', AGMSG_CODEX_BRIDGE_APP_SERVER: '' };
+  for (const key of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH', 'TMUX', 'TMUX_PANE', 'TERM_PROGRAM', 'ORCA_TERMINAL_HANDLE', 'AGMSG_TERMINAL_DRIVER']) delete env[key];
+  const start = (id, extra = {}) => execFileSync(process.platform === 'darwin' ? '/bin/bash' : 'bash', [join(root, 'scripts/session-start.sh'), 'codex', root], {
+    encoding: 'utf8', input: JSON.stringify({ session_id: id }), env: { ...env, ...extra },
+  });
+  return { ...setup, profile, old, start, record: name => readFileSync(join(root, `run/role-session.test__${name}`), 'utf8') };
+}
+
+test('Codex startup refreshes the sole destination from the current hook thread without replacing a live owner', t => {
+  const { root, profile, start, record, old, status } = codexStartupFixture(t, ['alice']);
+  const current = '01a13352-3599-7d62-a149-4c8182bcf008';
+  start(current);
+  assert.match(record('alice'), new RegExp(`session=${current}\\n`));
+  assert.ok(record('alice').includes(`codex_home=${realpathSync(profile)}\n`));
+  assert.match(status(), /current session not verified.*\/agmsg actas <name>/);
+  const live = `${old('alice')}owner=${thread}.${process.pid}\n`;
+  writeFileSync(join(root, 'run/role-session.test__alice'), live);
+  assert.match(start(current), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.equal(record('alice'), live);
+});
+
+test('Codex startup selects a unique matching pane and epoch, and reports ambiguity instead of guessing', t => {
+  const { root, start, record, old } = codexStartupFixture(t, ['alice', 'bob']);
+  const current = '01a13352-3599-7d62-a149-4c8182bcf009';
+  const ref = 'tmux:/tmp/agmsg-hook-tmux:%4';
+  const pane = { TMUX: '/tmp/agmsg-hook-tmux,321,0', TMUX_PANE: '%4' };
+  const mark = name => `${old(name)}named_ref=${ref}\nnamed_epoch=pid=321\n`;
+  writeFileSync(join(root, 'run/spawn.test__bob'), `${ref}\t${root}\tcodex\n`);
+  writeFileSync(join(root, 'run/role-session.test__bob'), mark('bob'));
+  start(current, pane);
+  assert.match(record('bob'), new RegExp(`session=${current}\\n`));
+  assert.equal(record('alice'), old('alice'));
+  writeFileSync(join(root, 'run/role-session.test__bob'), mark('bob').replace('pid=321', 'pid=320'));
+  assert.match(start(current, pane), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.match(record('bob'), /named_epoch=pid=320/);
+  writeFileSync(join(root, 'run/role-session.test__bob'), mark('bob'));
+  writeFileSync(join(root, 'run/spawn.test__alice'), `${ref}\t${root}\tcodex\n`);
+  writeFileSync(join(root, 'run/role-session.test__alice'), mark('alice'));
+  assert.match(start(current, pane), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.equal(record('alice'), mark('alice'));
+  assert.equal(record('bob'), mark('bob'));
+  assert.match(start(current), /not connected to a seat yet.*\/agmsg actas <name>/);
+});
 
 test('daemon status defaults to readable text and emits only JSON with --json', t => {
   const { status } = fixture(t);

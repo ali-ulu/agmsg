@@ -56,7 +56,7 @@ agmsg_daemon_seat_report() {
       agmsg_role_session_load "$team" "$agent" 2>/dev/null || true
       record_type="$(_agmsg_role_session_field "$_AGMSG_ROLE_SESSION_PATH" type)"
       record_home="$(_agmsg_role_session_field "$_AGMSG_ROLE_SESSION_PATH" codex_home)"
-      record_status='destination recorded'
+      record_status='destination recorded; current session not verified. In Codex, run /agmsg actas <name> to refresh the destination'
       if [ "$record_type" != codex ] || [ -z "${AGMSG_ROLE_SESSION_UUID:-}" ] || [ -z "$record_home" ]; then
         record_status='no destination record; restart Codex and run actas again to record it'
       fi
