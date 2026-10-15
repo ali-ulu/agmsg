@@ -115,10 +115,10 @@ function setQueueState(db, id, state, queueItemId = undefined) {
   });
 }
 
-function recordChildStart(db, id, pid, captureGroup) {
+function recordChildStart(db, id, pid, captureGroup, log = () => {}) {
   let group;
   try {
-    group = captureGroup(pid);
+    group = captureGroup(pid, (detail) => log(`codex queue: child start witness unavailable for pid ${pid}: ${detail}`));
   } catch {
     group = { state: "unreadable", reason: "child_start_witness_unavailable" };
   }
@@ -469,7 +469,7 @@ export function createCodexQueueChannel({
         message: inboxNudge(nonce),
         timeoutMs,
         signal: activeController.signal,
-        onChildStart: (pid) => recordChildStart(db, id, pid, captureGroup),
+        onChildStart: (pid) => recordChildStart(db, id, pid, captureGroup, log),
       });
     } finally {
       activeController = null;

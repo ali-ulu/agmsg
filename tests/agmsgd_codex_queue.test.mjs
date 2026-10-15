@@ -565,11 +565,14 @@ test('Codex channel queues one unread snapshot and confirms it before advancing 
   `).run(JSON.stringify(['alpha', 'alice']), codexHome, forThread, JSON.stringify({ eventSeq: 1, legacyId: 0 }), nonce, queueItem, unwitnessed, new Date().toISOString());
   const latestState = () => installDb.prepare("SELECT state FROM beta_codex_queue WHERE seat = ? ORDER BY id DESC LIMIT 1").get(JSON.stringify(['alpha', 'alice'])).state;
   const sentThreads = [];
+  const logs = [];
   let groupState = 'absent';
   const staleChannel = createCodexQueueChannel({
     db: installDb, installRoot: root, expectedOpGen: 4, env: { AGMSG_STORAGE_PATH: storageDir },
     observeGroup: () => ({ state: groupState }),
-    queue: async (request) => { sentThreads.push(request.thread); return { kind: 'failed', started: false, reason: 'spawn_failed:test' }; },
+    log: (message) => logs.push(message),
+    captureGroup: (pid, onFailure) => { onFailure('ps failed: status=1'); return { state: 'unreadable', reason: 'child_start_witness_unavailable', pgid: pid }; },
+    queue: async (request) => { request.onChildStart(4243); sentThreads.push(request.thread); return { kind: 'failed', started: false, reason: 'spawn_failed:test' }; },
   });
   insertPending(thread, 'unwitnessed-nonce', itemId);
   await staleChannel.pollOnce();
@@ -588,6 +591,7 @@ test('Codex channel queues one unread snapshot and confirms it before advancing 
   await staleChannel.pollOnce();
   assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'expired');
   assert.deepEqual(sentThreads, [thread], 'the nudge goes to the thread the seat names now');
+  assert.ok(logs.some((line) => line.includes('ps failed: status=1')), 'a missing start witness leaves its cause in the log');
   await staleChannel.stop();
 
   const bridgePid = String(process.pid);

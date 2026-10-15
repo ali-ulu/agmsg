@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { platform } from "node:os";
 import { bootId, sameBoot } from "../executor.mjs";
 
-export function processStartWitness(pid) {
+export function processStartWitness(pid, onFailure = () => {}) {
   if (!Number.isSafeInteger(pid) || pid < 2) return null;
   const os = platform();
   if (os === "linux") {
@@ -16,15 +16,19 @@ export function processStartWitness(pid) {
       const rest = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
       const start = rest[19];
       return /^\d+$/.test(start ?? "") ? `linux:${start}` : null;
-    } catch {
+    } catch (error) {
+      onFailure(`proc stat failed: ${error?.code ?? error?.message}`);
       return null;
     }
   }
   if (os === "darwin") {
     try {
       const start = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+      if (!start) onFailure("ps printed no start time");
       return start ? `darwin:${start}` : null;
-    } catch {
+    } catch (error) {
+      const stderr = String(error?.stderr ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+      onFailure(`ps failed: code=${error?.code ?? ""} status=${error?.status ?? ""} signal=${error?.signal ?? ""} stderr=${stderr}`);
       return null;
     }
   }
@@ -44,8 +48,8 @@ export function processStartWitness(pid) {
   return null;
 }
 
-export function captureProcessGroup(pgid) {
-  const witness = processStartWitness(pgid);
+export function captureProcessGroup(pgid, onFailure = () => {}) {
+  const witness = processStartWitness(pgid, onFailure);
   // The group id is kept even without a witness: a later observation can still
   // prove the group is gone (no such group), though never that it is present.
   if (!witness) return { state: "unreadable", reason: "child_start_witness_unavailable", pgid };
