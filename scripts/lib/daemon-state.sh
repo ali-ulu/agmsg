@@ -4,6 +4,8 @@
 [ -n "${_AGMSG_DAEMON_STATE_SH:-}" ] && return 0
 _AGMSG_DAEMON_STATE_SH=1
 _AGMSG_DAEMON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/instance-id.sh"
 
 agmsg_daemon_read_state() {
   AGMSGD_DESIRED=unknown; AGMSGD_HEALTH=unknown; AGMSGD_REASON="install record unavailable"
@@ -48,7 +50,7 @@ agmsg_daemon_read_state() {
   # refuted.
   if [ "$(uname -s)" = Darwin ] && [ -n "$current_boot" ] && [ "$current_boot" != "$boot" ]; then
     case "$boot" in ''|*[!0-9]*) ;; *)
-      if kill -0 "$pid" 2>/dev/null; then
+      if _agmsg_pid_alive "$pid"; then
         AGMSGD_HEALTH=unverifiable
         return 0
       fi ;;
