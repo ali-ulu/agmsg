@@ -143,14 +143,6 @@ agmsg_codex_refresh_destination() {
     [ "$matches" = 1 ] || return 1
   fi
   [ -n "$chosen_team" ] && [ -n "$chosen_name" ] || return 1
-  agmsg_role_session_load "$chosen_team" "$chosen_name"
-  if [ "${AGMSG_ROLE_SESSION_UUID:-}" != "$thread" ] \
-    && agmsg_instance_is_composite "${AGMSG_ROLE_SESSION_OWNER:-}"; then
-    local alive=0
-    agmsg_instance_alive "$AGMSG_ROLE_SESSION_OWNER" || alive=$?
-    # Unknown liveness is not evidence that the previous owner can be replaced.
-    [ "$alive" = 1 ] || return 1
-  fi
   local profile="${CODEX_HOME:-${HOME:+$HOME/.codex}}" owner
   case "$profile" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) return 1 ;; esac
   [ -d "$profile" ] || return 1
@@ -158,11 +150,16 @@ agmsg_codex_refresh_destination() {
   profile="$(agmsg_normalize_project_path "$profile")" || return 1
   case "$profile" in *[[:cntrl:]]*|'') return 1 ;; esac
   owner="$(agmsg_instance_id "$thread" codex 2>/dev/null)" || return 1
-  agmsg_role_session_record "$chosen_team" "$chosen_name" "$thread" "$project" codex "$owner" "$profile"
+  agmsg_role_session_record "$chosen_team" "$chosen_name" "$thread" "$project" codex "$owner" "$profile" inactive || return 1
   agmsg_role_session_load "$chosen_team" "$chosen_name"
   [ "$AGMSG_ROLE_SESSION_UUID" = "$thread" ] \
     && [ "$(_agmsg_role_session_field "$_AGMSG_ROLE_SESSION_PATH" codex_home)" = "$profile" ] || return 1
   AGMSG_CODEX_REFRESHED_PAIR="$chosen_team"$'\t'"$chosen_name"
+}
+
+agmsg_codex_unseated_notice() {
+  source "$SKILL_DIR/scripts/lib/boot-command.sh"
+  printf 'AGMSG delivery: this session is not connected to a seat yet. Run %s in Codex to receive messages.\n' "$(agmsg_actas_prompt codex '<name>')"
 }
 
 agmsg_session_start() {
@@ -179,7 +176,7 @@ agmsg_session_start() {
   agmsg_codex_writable_roots_notice "$SKILL_DIR"
   thread_id="$(agmsg_resolve_codex_thread "$PROJECT")"
   if [ -z "$thread_id" ]; then
-    echo 'AGMSG delivery: this session is not connected to a seat yet. Run /agmsg actas <name> in Codex to receive messages.'
+    agmsg_codex_unseated_notice
     exit 0
   fi
   # A recorded role belongs to its recorded Codex thread. The in-sandbox
@@ -208,7 +205,7 @@ agmsg_session_start() {
   PAIRS="$safe_pairs"
   if [ "$(printf '%s\n' "$PAIRS" | grep -c . || true)" != 1 ] \
     || { [ "$thread_id" != "${CODEX_THREAD_ID:-}" ] && [ "$thread_id" != "${SESSION_ID:-}" ]; }; then
-    echo 'AGMSG delivery: this session is not connected to a seat yet. Run /agmsg actas <name> in Codex to receive messages.'
+    agmsg_codex_unseated_notice
   fi
   # A request is an authority hand-off, not a best-effort hint. Never derive a
   # path from an absent RUN_DIR or publish a record whose type is empty: callers

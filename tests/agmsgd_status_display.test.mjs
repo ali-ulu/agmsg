@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { basename, join } from 'node:path';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { openInstallDb } from '../scripts/daemon/db.mjs';
@@ -49,20 +49,60 @@ function codexStartupFixture(t, names) {
   const start = (id, extra = {}) => execFileSync(process.platform === 'darwin' ? '/bin/bash' : 'bash', [join(root, 'scripts/session-start.sh'), 'codex', root], {
     encoding: 'utf8', input: JSON.stringify({ session_id: id }), env: { ...env, ...extra },
   });
-  return { ...setup, profile, old, start, record: name => readFileSync(join(root, `run/role-session.test__${name}`), 'utf8') };
+  const startAsync = (id, extra = {}) => {
+    const child = spawn(process.platform === 'darwin' ? '/bin/bash' : 'bash', [join(root, 'scripts/session-start.sh'), 'codex', root], { env: { ...env, ...extra } });
+    child.stdin.end(JSON.stringify({ session_id: id }));
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    const timer = setTimeout(() => child.kill(), 10000);
+    const done = new Promise(resolve => child.on('close', code => { clearTimeout(timer); resolve({ code, output }); }));
+    t.after(() => child.kill());
+    return { done };
+  };
+  return { ...setup, profile, old, start, startAsync, record: name => readFileSync(join(root, `run/role-session.test__${name}`), 'utf8') };
 }
 
-test('Codex startup refreshes the sole destination from the current hook thread without replacing a live owner', t => {
-  const { root, profile, start, record, old, status } = codexStartupFixture(t, ['alice']);
+async function waitForFile(path) {
+  const deadline = Date.now() + 5000;
+  while (!existsSync(path) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(existsSync(path), `timed out waiting for ${path}`);
+}
+
+test('Codex startup refreshes the sole destination from the current hook thread without replacing a live owner', async t => {
+  const { root, profile, start, startAsync, record, old, status } = codexStartupFixture(t, ['alice']);
   const current = '01a13352-3599-7d62-a149-4c8182bcf008';
   start(current);
   assert.match(record('alice'), new RegExp(`session=${current}\\n`));
   assert.ok(record('alice').includes(`codex_home=${realpathSync(profile)}\n`));
-  assert.match(status(), /current session not verified.*\/agmsg actas <name>/);
+  assert.match(status(), /current session not verified.*\$.* actas <name>/);
+  assert.ok(status().includes(`$${basename(root)} actas <name>`));
   const live = `${old('alice')}owner=${thread}.${process.pid}\n`;
   writeFileSync(join(root, 'run/role-session.test__alice'), live);
-  assert.match(start(current), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.match(start(current), /not connected to a seat yet.*\$.* actas <name>/);
   assert.equal(record('alice'), live);
+
+  // Gate both writers after the owner decision, but signal lock attempts before
+  // acquisition. With no shared lock, B passes the old decision and overwrites A.
+  const library = join(root, 'scripts/lib/role-session.sh');
+  let source = readFileSync(library, 'utf8');
+  source = source.replace('  agmsg_lock_acquire "$dir" || return 1', '  : > "$AGMSG_TEST_WRITE_GATE.attempt.$SESSION_ID"\n  agmsg_lock_acquire "$dir" || return 1');
+  source = source.replace('  # The naming mark', '  : > "$AGMSG_TEST_WRITE_GATE.ready.$bare_sid"\n  for gate_tick in {1..500}; do [ -f "$AGMSG_TEST_WRITE_GATE.go.$bare_sid" ] && break; sleep 0.01; done\n  # The naming mark');
+  writeFileSync(library, source);
+  writeFileSync(join(root, 'run/role-session.test__alice'), old('alice'));
+  const second = '01a13352-3599-7d62-a149-4c8182bcf010';
+  const gate = join(root, 'writer-gate');
+  const first = startAsync(current, { AGMSG_TEST_WRITE_GATE: gate });
+  await waitForFile(`${gate}.ready.${current}`);
+  const next = startAsync(second, { AGMSG_TEST_WRITE_GATE: gate });
+  await waitForFile(`${gate}.attempt.${second}`);
+  writeFileSync(`${gate}.go.${current}`, '');
+  assert.equal((await first.done).code, 0);
+  writeFileSync(`${gate}.go.${second}`, '');
+  const result = await next.done;
+  assert.equal(result.code, 0);
+  assert.match(result.output, /not connected to a seat yet/);
+  assert.match(record('alice'), new RegExp(`session=${current}\\n`));
 });
 
 test('Codex startup selects a unique matching pane and epoch, and reports ambiguity instead of guessing', t => {
@@ -77,15 +117,15 @@ test('Codex startup selects a unique matching pane and epoch, and reports ambigu
   assert.match(record('bob'), new RegExp(`session=${current}\\n`));
   assert.equal(record('alice'), old('alice'));
   writeFileSync(join(root, 'run/role-session.test__bob'), mark('bob').replace('pid=321', 'pid=320'));
-  assert.match(start(current, pane), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.match(start(current, pane), /not connected to a seat yet.*\$.* actas <name>/);
   assert.match(record('bob'), /named_epoch=pid=320/);
   writeFileSync(join(root, 'run/role-session.test__bob'), mark('bob'));
   writeFileSync(join(root, 'run/spawn.test__alice'), `${ref}\t${root}\tcodex\n`);
   writeFileSync(join(root, 'run/role-session.test__alice'), mark('alice'));
-  assert.match(start(current, pane), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.match(start(current, pane), /not connected to a seat yet.*\$.* actas <name>/);
   assert.equal(record('alice'), mark('alice'));
   assert.equal(record('bob'), mark('bob'));
-  assert.match(start(current), /not connected to a seat yet.*\/agmsg actas <name>/);
+  assert.match(start(current), /not connected to a seat yet.*\$.* actas <name>/);
 });
 
 test('daemon status defaults to readable text and emits only JSON with --json', t => {
