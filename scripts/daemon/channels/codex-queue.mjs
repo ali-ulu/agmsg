@@ -250,6 +250,10 @@ async function pendingObservation(pending, now, observeGroup) {
     let group;
     try { group = observeGroup(children); } catch { group = { state: "unreadable", reason: "child_group_observation_failed" }; }
     if (group?.state !== "absent") return { state: "pending", reason: group?.reason ?? "queue_child_still_running", childrenUnresolved: true };
+  } else if (children.state === "unreadable" && typeof children.result === "string") {
+    // The child's start could not be witnessed, but its result is recorded, so
+    // it has already finished: nothing is left to wait for. Go on to the
+    // queue and rollout evidence and the confirmation window.
   } else if (children.state !== "absent") {
     return { state: "pending", reason: children.reason ?? "child_group_record_unreadable", childrenUnresolved: true };
   }
@@ -291,7 +295,17 @@ export function createCodexQueueChannel({
     const seat = seatKey(team, agent);
     const registeredProjects = registrationProjects(teamConfig, agent);
     const bridge = bridgeState(join(installRoot, "run"), team, agent, registeredProjects);
-    const pending = readPending(db, seat);
+    let pending = readPending(db, seat);
+    if (pending && registered) {
+      // A reservation made for another thread than the one this seat's record
+      // names now is about a conversation that is gone: drop it, whatever the
+      // child state says, and deliver to the current thread.
+      const current = readSession(join(installRoot, "run"), team, agent);
+      if (current.state === "present" && current.record.thread && current.record.thread !== pending.thread) {
+        setQueueState(db, pending.id, "expired");
+        pending = null;
+      }
+    }
     if (pending) {
       const observation = await pendingObservation(pending, now, observeGroup);
       if (observation.childrenUnresolved && pending.codex_home) blockedCodexHomes.add(pending.codex_home);
