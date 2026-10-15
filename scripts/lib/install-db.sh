@@ -66,17 +66,13 @@ agmsg_install_db_ensure_meta() {   # <install_db_path>
 # `agmsg daemon enable` go through. Never touches an existing install_id.
 # Returns 1 on any sqlite failure.
 agmsg_install_db_apply_schema() {   # <install_db_path> <schema_sql_path>
-  local db="$1" schema="$2" col cols
-  cols="$(agmsg_sqlite_capture "$db" "SELECT name FROM pragma_table_info('meta');")" || return 1
+  local db="$1" schema="$2" col present
   for col in node_path node_version; do
-    case "
-$cols
-" in
-      *"
-$col
-"*) ;;
-      *) sqlite3 "$db" "ALTER TABLE meta ADD COLUMN $col TEXT;" 2>/dev/null || return 1 ;;
-    esac
+    # One scalar per column: a multi-line result carries a CR on every line
+    # from native Windows sqlite3.exe, which a name comparison would miss.
+    present="$(agmsg_sqlite_capture "$db" "SELECT count(*) FROM pragma_table_info('meta') WHERE name = '$col';")" || return 1
+    [ "$present" = 1 ] && continue
+    sqlite3 "$db" "ALTER TABLE meta ADD COLUMN $col TEXT;" 2>/dev/null || return 1
   done
   sqlite3 "$db" < "$schema" 2>/dev/null
 }
