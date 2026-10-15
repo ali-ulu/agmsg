@@ -524,6 +524,10 @@ cmd_start() {
     _path_hint status
   else
     echo "agmsg daemon start: did not become ready in time -- check 'agmsg daemon status'" >&2
+    if [ "$(_os)" = windows ] && _service_registered; then
+      echo "agmsg daemon start: the scheduled task $(_schtasks_name) was created and started, but agmsgd never reported ready. Task Scheduler's own record of the run follows; 'agmsg daemon disable' removes the task." >&2
+      _schtasks /Query /TN "$(_schtasks_name)" /V /FO LIST 2>&1 | grep -E 'Status|Last Run Time|Last Result|Task To Run' >&2 || true
+    fi
     agmsg_daemon_warn_if_stopped always
     _path_hint status >&2
     return 1
