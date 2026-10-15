@@ -123,13 +123,18 @@ _jev_api_base() {   # <provider>
 # Splitting what handle's two jq calls print. Fields end with U+001F and
 # records with U+001E (see handle), so an empty field is kept and a value can
 # hold anything else. Pure parameter expansion: no read, no subshell.
+#
+# Both always terminate: a piece with no separator left is taken whole and ends
+# the loop, so a stray fragment can never leave the remainder unconsumed.
 _jev_fields() {   # <text>  ->  array $_JEV_F
   local rest="$1" f us=$'\037'
   _JEV_F=()
   while [ -n "$rest" ]; do
-    f=${rest%%"$us"*}
+    case "$rest" in
+      *"$us"*) f=${rest%%"$us"*}; rest=${rest#*"$us"} ;;
+      *) f=$rest; rest="" ;;
+    esac
     _JEV_F+=("$f")
-    rest=${rest#*"$us"}
   done
 }
 
@@ -137,9 +142,11 @@ _jev_records() {   # <text>  ->  array $_JEV_R
   local rest="$1" f rs=$'\036'
   _JEV_R=()
   while [ -n "$rest" ]; do
-    f=${rest%%"$rs"*}
+    case "$rest" in
+      *"$rs"*) f=${rest%%"$rs"*}; rest=${rest#*"$rs"} ;;
+      *) f=$rest; rest="" ;;
+    esac
     _JEV_R+=("$f")
-    rest=${rest#*"$rs"}
   done
 }
 
@@ -198,10 +205,20 @@ _jev_read_key() {   # <key_file>
     return 1
   fi
   # Builtin read, not cat in a command substitution (a process each on native
-  # Windows, #1584). -d '' reads to the end of the file; trailing newlines are
-  # then dropped the way "$(cat ...)" dropped them, and nothing else is.
+  # Windows, #1584). `read -d ''` stops at a NUL, so the file is read in
+  # NUL-separated pieces until the end and the pieces are joined -- the NULs
+  # drop out exactly as they did from "$(cat ...)", and what follows one is
+  # still checked, not ignored. Trailing newlines are then dropped the same way.
   key=""
-  { IFS= read -r -d '' key; } 2>/dev/null < "$key_file" || true
+  {
+    local piece="" more=0
+    while :; do
+      piece=""
+      IFS= read -r -d '' piece && more=1 || more=0
+      key+="$piece"
+      [ "$more" -eq 1 ] || break
+    done
+  } 2>/dev/null < "$key_file" || true
   while [ "${key%$'\n'}" != "$key" ]; do key="${key%$'\n'}"; done
   if [ -z "$key" ]; then
     _JEV_KEY_ERROR="key file is empty: $key_file"

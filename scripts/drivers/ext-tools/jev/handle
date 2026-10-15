@@ -244,7 +244,12 @@ result_out="$(jq -j '
     | map(if . == 13 then [92, 114] elif . == 10 then [92, 110]
           elif (. < 32 or . == 127) then [32] else [.] end)
     | (add // []) | implode;
-  def num: if . == null then "" else tostring end;
+  # A number as jq prints it. Only a string can carry anything else, and a
+  # separator or other control character in one becomes "_" (not a space, which
+  # printf would accept as a leading blank): it stays a non-number, so printf
+  # refuses it below exactly as it refused the raw text before.
+  def num: if . == null then ""
+           else (tostring | explode | map(if (. < 32 or . == 127) then 95 else . end) | implode) end;
   def rec(f): (f | map(. + US) | add) + RS;
   (.answers // {}) as $a
   | ($a | keys_unsorted) as $ks
@@ -311,9 +316,15 @@ rm -f "$out_file"
 # (review round 4).
 [ -n "$result_out" ] || fail "jev: unexpected response shape"
 
+# Every field above went through `one`, so none can hold a separator and the
+# shape is exactly: one first record of 4 fields, then row_count records of 5.
+# Anything else is not a response this script rendered.
 _jev_records "$result_out"
 _jev_fields "${_JEV_R[0]}"
+[ "${#_JEV_F[@]}" -eq 4 ] || fail "jev: unexpected response shape"
 row_count="${_JEV_F[0]:-}"
+case "$row_count" in ''|*[!0-9]*) fail "jev: unexpected response shape" ;; esac
+[ "$row_count" -eq $(( ${#_JEV_R[@]} - 1 )) ] || fail "jev: unexpected response shape"
 cost_val="${_JEV_F[1]:-}"
 in_tokens="${_JEV_F[2]:-}"
 out_tokens="${_JEV_F[3]:-}"
@@ -326,6 +337,7 @@ out_tokens="${_JEV_F[3]:-}"
 # else in the reply to salvage it with, unlike the 2+ case below.
 if [ "$row_count" -eq 1 ]; then
   _jev_fields "${_JEV_R[1]}"
+  [ "${#_JEV_F[@]}" -eq 5 ] || fail "jev: unexpected response shape"
   [ "${_JEV_F[1]:-}" = "true" ] || fail "jev: unexpected response shape"
   choices="${_JEV_F[2]:-}"
   p_val="${_JEV_F[3]:-}"
@@ -359,6 +371,7 @@ else
   lines=()
   for ((idx = 1; idx < ${#_JEV_R[@]}; idx++)); do
     _jev_fields "${_JEV_R[$idx]}"
+    [ "${#_JEV_F[@]}" -eq 5 ] || fail "jev: unexpected response shape"
     seg_name="${_JEV_F[0]:-}"
     if [ "${_JEV_F[1]:-}" != "true" ]; then
       printf -v line '%s=error (malformed answer)' "$seg_name"
