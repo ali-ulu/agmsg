@@ -1,0 +1,73 @@
+name: rc-install-check
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/rc-install-check.yml
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        scenario: [fresh-rc1, update-from-153, fresh-head]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Environment
+        run: |
+          uname -a; node -v; npm -v; bash --version | head -1
+          whoami; echo "HOME=$HOME"
+          command -v systemctl && systemctl --user status 2>&1 | head -5 || true
+      - name: Run scenario
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          S="$HOME/.agents/skills/agmsg/scripts"
+          step() { echo; echo "::group::$*"; echo "\$ $*"; "$@"; echo "[exit=$?]"; echo "::endgroup::"; }
+          show() {
+            echo; echo "=== $* ==="
+            "$@" 2>&1
+            echo "[exit=$?]"
+          }
+          case "$SCENARIO" in
+            fresh-rc1)
+              show npx --yes agmsg@1.6.0-rc.1 install
+              ;;
+            update-from-153)
+              show npx --yes agmsg@1.5.3 install
+              show bash "$S/join.sh" ci seat1 claude-code "$PWD"
+              show npx --yes agmsg@1.6.0-rc.1 install --update
+              ;;
+            fresh-head)
+              show bash ./install.sh
+              ;;
+          esac
+          echo; echo "=== version ==="; show bash "$S/version.sh"
+          run_agmsg() { if [ "$SCENARIO" = fresh-head ]; then show bash "$S/agmsg" "$@"; else show npx --yes agmsg@1.6.0-rc.1 "$@"; fi; }
+          echo; echo "=== launcher on PATH? ==="; command -v agmsg || echo "agmsg not on PATH"
+          run_agmsg daemon enable
+          run_agmsg daemon status
+          if [ "$SCENARIO" != update-from-153 ]; then
+            show bash "$S/join.sh" ci seat1 claude-code "$PWD"
+          fi
+          show bash "$S/join.sh" ci seat2 claude-code "$PWD/other"
+          show bash "$S/send.sh" ci seat1 seat2 'hello from seat1'
+          show bash "$S/inbox.sh" ci seat2
+          run_agmsg daemon status
+          run_agmsg daemon disable
+          run_agmsg daemon status
+      - name: Daemon and install state
+        if: always()
+        run: |
+          ls -la "$HOME/.agents/skills/agmsg" 2>&1 | head -30
+          find "$HOME/.agents/skills/agmsg/run" -maxdepth 2 2>&1 | head -30
+          for f in "$HOME/.agents/skills/agmsg/run"/*.log "$HOME/.agents/skills/agmsg/run"/agmsgd*; do [ -f "$f" ] && { echo "--- $f"; tail -40 "$f"; }; done
+          true
