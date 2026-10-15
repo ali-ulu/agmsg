@@ -254,7 +254,23 @@ _agmsg_codex_seat_record_write "$SEAT_RECORD" "$PROJECT_HASH" "$server_bg" "$POR
   exec_plain_codex
 }
 
-"$SCRIPT_DIR/../../../delivery.sh" set monitor codex "$PROJECT" >/dev/null
+# `delivery.sh set monitor` rewrites .codex/hooks.json to the same content when
+# monitor delivery is already configured, and costs dozens of processes to find
+# that out -- seconds on Windows, paid on every launch. Skip it when the file
+# already carries this install's SessionStart and SessionEnd entries for this
+# project and no Stop/PostToolUse entry (check-inbox.sh) that `set monitor`
+# would strip. Anything else, including a path spelled differently, falls
+# through to the full set. Read with builtins: no process is started here.
+_hooks_content=""
+read -r -d '' _hooks_content < "$PROJECT/.codex/hooks.json" 2>/dev/null || true
+if [[ "$_hooks_content" == *"$SKILL_DIR/scripts/session-start.sh"* \
+   && "$_hooks_content" == *"$SKILL_DIR/scripts/session-end.sh"* \
+   && "$_hooks_content" == *"$PROJECT"* \
+   && "$_hooks_content" != *"$SKILL_DIR/scripts/check-inbox.sh"* ]]; then
+  :
+else
+  "$SCRIPT_DIR/../../../delivery.sh" set monitor codex "$PROJECT" >/dev/null
+fi
 
 export AGMSG_CODEX_BRIDGE=1
 export AGMSG_CODEX_BRIDGE_APP_SERVER="$SOCKET_URL"

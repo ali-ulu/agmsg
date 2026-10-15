@@ -112,6 +112,31 @@ teardown() {
 
 # --- #1537: the seat key must reach tool commands under any shell_environment_policy ---
 
+# A monitor launch through the shim used to run `delivery status` twice (the shim's own
+# check, then again when `set monitor` asked the PATH shim for `codex --version`) and
+# rewrite hooks that were already in place. Each is dozens of processes, which is
+# the bulk of a Windows launch (#1613). Counted, not timed.
+@test "codex-monitor: a shim launch in a configured monitor project runs delivery status once and set not at all (#1613)" {
+  skip_on_windows "spawns a python socket listener; flaky on the Windows runner"
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+  export DELIVERY_LOG="$TEST_PROJECT/delivery.log"
+  mv "$SCRIPTS/delivery.sh" "$SCRIPTS/delivery.real.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$DELIVERY_LOG"' \
+    'exec bash "$(dirname "$0")/delivery.real.sh" "$@"' > "$SCRIPTS/delivery.sh"
+  chmod +x "$SCRIPTS/delivery.sh"
+  # codex on PATH is the shim itself, as in a real install, so any nested
+  # `codex --version` re-enters it.
+  mkdir -p "$TEST_PROJECT/shimbin"
+  ln -s "$TYPES/codex/codex-shim.sh" "$TEST_PROJECT/shimbin/codex"
+
+  run bash -c 'cd "$TEST_PROJECT" && PATH="$TEST_PROJECT/shimbin:$PATH" AGMSG_REAL_CODEX="$FAKE_CODEX" AGMSG_CODEX_BRIDGE_LAUNCHER_CMD=/bin/true codex'
+
+  [ "$status" -eq 0 ]
+  grep -q 'plain-codex <--remote> <ws://127\.0\.0\.1:[0-9][0-9]*>' "$CALL_LOG"
+  [ "$(grep -c '^status ' "$DELIVERY_LOG")" -eq 1 ]
+  [ "$(grep -c '^set ' "$DELIVERY_LOG" || true)" -eq 0 ]
+}
+
 @test "codex-monitor: the app-server is launched with the seat key as a shell_environment_policy.set override (#1537)" {
   skip_on_windows "spawns a python socket listener; flaky on the Windows runner"
 
