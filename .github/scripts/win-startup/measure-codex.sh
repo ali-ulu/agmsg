@@ -62,17 +62,22 @@ for r in $(seq 1 "$runs"); do
     a=$(now); PATH="$work/bin-$id-$r:$work/real:$PATH" bash "$skill/scripts/delivery.sh" set monitor codex "$proj" >/dev/null 2>&1; b=$(now)
     t_set=$(elapsed "$a" "$b")
 
-    # The whole launch: shim -> monitor -> exec of the fake TUI.
-    export TUI_FILE="$work/tui-$id-$r"; rm -f "$TUI_FILE"
-    trace="$work/trace-$id-$r.log"
+    # The whole launch: shim -> monitor -> exec of the fake TUI. The first launch
+    # in a project is a warm-up (a fix that skips an unchanged `set monitor` still
+    # runs it once); the second is timed WITHOUT tracing (xtrace itself costs on
+    # Windows); a third, traced launch only counts.
+    export TUI_FILE="$work/tui-$id-$r"
+    ( cd "$proj" && env PATH="$work/bin-$id-$r:$work/real:$PATH" codex ) >/dev/null 2>&1
+    rm -f "$TUI_FILE"
     a=$(now)
-    ( cd "$proj" && env PATH="$work/bin-$id-$r:$work/real:$PATH" \
-        SHELLOPTS=xtrace PS4='+T ${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO} ' codex ) 2> "$trace"
-    b=$(now)
+    ( cd "$proj" && env PATH="$work/bin-$id-$r:$work/real:$PATH" codex ) >/dev/null 2>&1
     if [ -f "$TUI_FILE" ]; then t_launch=$(elapsed "$a" "$(cat "$TUI_FILE")"); else t_launch="no-TUI"; fi
-    n_status=$(grep -c 'delivery.sh.* status\|delivery_script.*status' "$trace" || true)
+    trace="$work/trace-$id-$r.log"
+    ( cd "$proj" && env PATH="$work/bin-$id-$r:$work/real:$PATH" \
+        SHELLOPTS=xtrace PS4='+T ${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO} ' codex ) 2> "$trace" >/dev/null
+    n_status=$(grep -c "delivery.sh.* status\|delivery_script.* status" "$trace" || true)
     n_lines=$(wc -l < "$trace" | tr -d ' ')
-    echo "run $r  $ref: launch=${t_launch}s  (delivery status alone ${t_status}s, set monitor alone ${t_set}s, trace lines $n_lines)"
+    echo "run $r  $ref: launch=${t_launch}s  (delivery status alone ${t_status}s, set monitor alone ${t_set}s; traced launch: $n_lines lines, delivery status mentioned $n_status times)"
     results["$ref"]+="$t_launch "
     results["status:$ref"]+="$t_status "
     results["set:$ref"]+="$t_set "
