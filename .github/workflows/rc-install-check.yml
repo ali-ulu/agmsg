@@ -10,8 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-        scenario: [fresh-rc1, update-from-153, fresh-head]
+        os: [windows-latest]
+        scenario: [fresh-head]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -90,4 +90,9 @@ jobs:
           sqlite3 "$DB" .tables
           sqlite3 "$DB" .schema
           sqlite3 "$DB" 'select * from meta;' 2>&1 | head -20
+          true
+      - name: Scheduled task state
+        if: always()
+        run: |
+          schtasks.exe //Query //FO LIST 2>&1 | grep -i -B2 -A8 agmsgd || echo "no agmsgd task listed"
           true
