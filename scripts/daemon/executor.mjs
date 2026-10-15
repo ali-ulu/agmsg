@@ -71,8 +71,11 @@ function isOldDarwinBootId(recorded) {
 
 // true / false / null (cannot tell) for "`recorded` is this boot's id".
 export function sameBoot(recorded) {
-  if (bootId() === recorded) return true;
-  return isOldDarwinBootId(recorded) ? null : false;
+  // Checked before the value comparison: when kern.bootsessionuuid cannot
+  // be read, bootId() falls back to a number, which must not make an
+  // old-format record look like an exact match.
+  if (isOldDarwinBootId(recorded)) return null;
+  return bootId() === recorded;
 }
 
 // This process's own executor triple, as of the call. `role` and `pid` are
