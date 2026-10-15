@@ -10,19 +10,28 @@ Kurulu sürüm: `~/.agents/skills/agmsg/` · Takım: **ortak** · Sen: **ali**
 | Üye | Tip | Mesajı nasıl görür |
 |---|---|---|
 | **ali** | `agmsg-app` (insan) | Telegram köprüsünden |
-| **claude** | `claude-code` | `turn` — turlar arasında otomatik |
-| **codex** | `codex` | `turn` destekliyor, henüz açılmadı |
-| **opencode** | `opencode` | `turn` destekliyor, henüz açılmadı |
-| **agy** | `antigravity` | `turn` destekliyor, henüz açılmadı |
+| **claude** | `claude-code` | `turn` — turlar arasında otomatik ✅ |
+| **codex** | `codex` | `turn` açık ✅ |
+| **opencode** | `opencode` | `turn` açık ✅ |
+| **agy** | `antigravity` | `turn` açık ✅ |
 | **devin** | `devin` | elle bakmalı |
 | **cline** | `cline` (bu fork ekledi) | elle bakmalı |
 | **freebuff** | `freebuff` (bu fork ekledi) | elle bakmalı |
 | **dsh** | `dsh` (bu fork ekledi) | elle bakmalı |
 
 **Dürüst sınır:** mesaj her üyenin kutusuna düşüyor ama otomatik "uyanma"
-sadece `turn`/`monitor` destekleyen tiplerde var. Cline, freebuff, DSH ve
-Devin'in agmsg'e kanca takacağı bir yeri yok — onlar kendi oturumlarında
-`/agmsg` (ya da `$agmsg`) çalıştırıp kutusuna bakmalı.
+sadece `turn`/`monitor` destekleyen tiplerde var. Dördünü (claude, codex,
+opencode, agy) `turn` moduna aldım: bir sonraki oturumlarında Stop kancası
+turlar arasında kutularına bakacak. **Bu dördünü henüz canlı test etmedim**
+— codex/opencode/agy oturumu açıp yayın atarak doğrulamak lazım.
+
+Cline, freebuff, DSH ve Devin'in agmsg'e kanca takacağı bir yeri yok —
+onlar kendi oturumlarında `/agmsg` (ya da `$agmsg`) çalıştırıp kutusuna
+bakmalı.
+
+Geri almak istersen: `bash $A/delivery.sh set off <tip> ~/Projects`.
+Kurulum `~/.codex/config.toml`'u değiştirdi ve yedeğini
+`~/.codex/config.toml.bak` olarak bıraktı.
 
 Gerçek zamanlı `monitor` kipi bu Claude Code'da çalışmıyor: generic
 **Monitor** aracı bu sürümde yok, agmsg'in kendi talimatı bu durumda
