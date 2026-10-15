@@ -146,11 +146,11 @@ teardown() {
   grep -q 'plain-codex <--remote> <ws://127\.0\.0\.1:[0-9][0-9]*>' "$CALL_LOG"
   # Only SessionEnd's project differs: not what set left, so it runs again and repairs it.
   sed 's#session-end.sh\(.\{1,3\}\)[^ ]* \{0,1\}[^"]*"#session-end.sh\1 codex /tmp/wrong-project"#' "$TEST_PROJECT/.codex/hooks.json" > "$TEST_PROJECT/hooks.edited"
-  ! cmp -s "$TEST_PROJECT/hooks.edited" "$TEST_PROJECT/.codex/hooks.json"
+  refute cmp -s "$TEST_PROJECT/hooks.edited" "$TEST_PROJECT/.codex/hooks.json"
   cp "$TEST_PROJECT/hooks.edited" "$TEST_PROJECT/.codex/hooks.json"
   _launch
   [ "$(grep -c '^set ' "$DELIVERY_LOG")" -eq 1 ]
-  ! grep -q '/tmp/wrong-project' "$TEST_PROJECT/.codex/hooks.json"
+  refute grep -q '/tmp/wrong-project' "$TEST_PROJECT/.codex/hooks.json"
 }
 
 @test "codex-monitor: the app-server is launched with the seat key as a shell_environment_policy.set override (#1537)" {
