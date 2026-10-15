@@ -1,0 +1,51 @@
+name: win-startup-measure
+# Temporary: measures the Windows startup cost of the Codex shim (#1613) and the
+# jev handle (#1584) on windows-latest, before/after the two fixes. Not meant
+# to be merged.
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: baseline ref
+        default: origin/main
+      codex_ref:
+        description: ref carrying the Codex startup fix
+        default: origin/codex-startup-fast
+      jev_ref:
+        description: ref carrying the jev handle fix
+        default: origin/jev-handle-fast
+  push:
+    branches: [ci-win-measure]
+
+jobs:
+  measure:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      BASE_REF: ${{ inputs.base_ref || 'origin/main' }}
+      CODEX_REF: ${{ inputs.codex_ref || 'origin/codex-startup-fast' }}
+      JEV_REF: ${{ inputs.jev_ref || 'origin/jev-handle-fast' }}
+      RUNS: '3'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install sqlite3 (the Windows runner has none)
+        shell: pwsh
+        run: choco install sqlite -y --no-progress
+      - name: Environment
+        run: |
+          uname -a; node -v; bash --version | head -1
+          for t in sqlite3 jq curl git; do printf '%s: ' "$t"; command -v "$t" || echo MISSING; done
+          git rev-parse "$BASE_REF" "$CODEX_REF" "$JEV_REF"
+      - name: "#1613 codex launch through the shim"
+        run: |
+          bash .github/scripts/win-startup/measure-codex.sh "$PWD" "$BASE_REF" "$CODEX_REF"
+      - name: "#1584 jev handle"
+        run: |
+          bash .github/scripts/win-startup/measure-jev.sh "$PWD" "$BASE_REF" "$JEV_REF"
