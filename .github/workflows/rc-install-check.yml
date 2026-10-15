@@ -82,3 +82,12 @@ jobs:
           find "$HOME/.agents/skills/agmsg/run" -maxdepth 2 2>&1 | head -30
           for f in "$HOME/.agents/skills/agmsg/run"/*.log "$HOME/.agents/skills/agmsg/run"/agmsgd*; do [ -f "$f" ] && { echo "--- $f"; tail -40 "$f"; }; done
           true
+      - name: install.db shape
+        if: always()
+        run: |
+          sqlite3 --version
+          DB="$HOME/.agents/skills/agmsg/run/install.db"
+          sqlite3 "$DB" .tables
+          sqlite3 "$DB" .schema
+          sqlite3 "$DB" 'select * from meta;' 2>&1 | head -20
+          true
