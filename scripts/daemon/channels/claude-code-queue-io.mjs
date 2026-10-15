@@ -136,7 +136,7 @@ function readTail(path, maxBytes) {
 // Reads the delivery outcome straight from the receiving session's own
 // transcript. Measured line shapes (2026-10-05 addendum):
 //   - delivered: a `type:"user"` line with `origin.body` containing the
-//     nonce verbatim — the ONLY line this treats as proof of delivery.
+//     nonce verbatim — proof of delivery (with the mid-turn shape below).
 //   - held/declined: a `type:"system"`, `subtype:"informational"` line whose
 //     `content` (a possibly-truncated preview) contains the nonce.
 //   - absorbed mid-turn (measured 2026-10-15): a `type:"attachment"` line
