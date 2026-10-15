@@ -50,7 +50,7 @@ export function takeOwnership(db, { installRoot, expectedDesired, expectedOpGen,
       if (owner.executor_pid == null) {
         refuse = "owner state is not none but has no recorded executor";
       } else {
-        const alive = isAlive({ pid: owner.executor_pid, bootId: owner.executor_boot_id });
+        const alive = isAlive({ pid: owner.executor_pid, bootId: owner.executor_boot_id, startedAt: owner.executor_started_at });
         if (alive === true) refuse = "current owner is alive";
         else if (alive === null) refuse = "current owner's liveness cannot be determined";
         // alive === false (confirmed dead): fall through, this call takes over.

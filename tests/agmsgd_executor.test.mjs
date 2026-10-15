@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { bootId, currentExecutor, isAlive, sameBoot } from "../scripts/daemon/executor.mjs";
+import { bootId, currentExecutor, isAlive } from "../scripts/daemon/executor.mjs";
 
 test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apart", () => {
   assert.equal(bootId(), bootId(), "bootId must not change within the same boot");
@@ -30,9 +30,13 @@ test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apa
 
   if (process.platform === "darwin") {
     // A record from when the boot id was kern.boottime seconds, shifted a
-    // few seconds since by a clock adjustment, is still this boot.
+    // few seconds since by a clock adjustment, is still this boot -- but
+    // only for a process older than the recorded claim (a pid born after
+    // it is a reuse, e.g. after a quick restart).
     const boottime = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" }).stdout;
-    const sec = Number(boottime.match(/sec\s*=\s*(\d+)/)[1]);
-    assert.equal(sameBoot(String(sec - 3)), true);
+    const legacy = String(Number(boottime.match(/sec\s*=\s*(\d+)/)[1]) - 3);
+    const now = new Date().toISOString();
+    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: now }), true);
+    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: "2000-01-01T00:00:00.000Z" }), false);
   }
 });
