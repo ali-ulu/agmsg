@@ -38,5 +38,7 @@ test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apa
     const now = new Date().toISOString();
     assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: now }), true);
     assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: "2000-01-01T00:00:00.000Z" }), false);
+    // No usable claim time: cannot tell, which must never read as dead.
+    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: null }), null);
   }
 });

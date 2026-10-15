@@ -80,8 +80,9 @@ export function sameBoot(recorded) {
   return bootId() === recorded || legacyBootMatches(recorded);
 }
 
-// True when `pid` started no later than `claimedAt` (an ISO time): a process
-// born after the claim is a reused pid, never the recorded executor.
+// true when `pid` started no later than `claimedAt` (an ISO time), false when
+// it started after it (a reused pid, never the recorded executor), null when
+// either time cannot be read.
 function startedBeforeClaim(pid, claimedAt) {
   try {
     const lstart = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
@@ -90,9 +91,10 @@ function startedBeforeClaim(pid, claimedAt) {
     }).trim();
     const started = Date.parse(lstart);
     const claimed = Date.parse(claimedAt);
-    return Number.isFinite(started) && Number.isFinite(claimed) && started <= claimed;
+    if (!Number.isFinite(started) || !Number.isFinite(claimed)) return null;
+    return started <= claimed;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -114,14 +116,11 @@ export function currentExecutor() {
 // where a stale boot id is itself the proof, not a reason to say "cannot
 // tell".
 export function isAlive({ pid, bootId: capturedBootId, startedAt }) {
-  if (bootId() !== capturedBootId) {
-    // Only an old-format darwin record gets past a differing boot id, and
-    // then only if the process is older than the recorded claim.
-    if (!legacyBootMatches(capturedBootId) || !startedBeforeClaim(pid, startedAt)) return false;
-  }
+  const legacy = bootId() !== capturedBootId;
+  // Only an old-format darwin record gets past a differing boot id.
+  if (legacy && !legacyBootMatches(capturedBootId)) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     if (error?.code === "ESRCH") return false;
     // EPERM: a process at that pid exists but this user cannot signal it --
@@ -129,7 +128,10 @@ export function isAlive({ pid, bootId: capturedBootId, startedAt }) {
     // permission fact, but a permission-denied answer to `kill(pid, 0)`
     // never happens for a pid that does not exist). Anything else is a
     // genuine "cannot tell" (e.g. a platform where signal 0 is unsupported).
-    if (error?.code === "EPERM") return true;
-    return null;
+    if (error?.code !== "EPERM") return null;
   }
+  // An old-format record is only a hint of the same boot, so the live
+  // process must also predate the recorded claim.
+  if (legacy) return startedBeforeClaim(pid, startedAt);
+  return true;
 }
