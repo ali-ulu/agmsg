@@ -1431,16 +1431,45 @@ agmsg_terminal_name_self() {
       # with; a caller with none (every action-hook caller routed through
       # self-name.sh) cannot ask either question and keeps refusing exactly as
       # every caller did before this existed.
+      #
+      # VANISHED-TEAM RECORD: a claimant whose team is no longer on disk is an
+      # older placement. It is dropped, and the seat acting now takes the pane,
+      # unless its owner is confirmed to be alive in this very pane. This needs
+      # no session id; undecidable counts as not confirmed.
       local _took_over=0 _rival_spawn="" _role_path=""
       local _want_id=""
       _want_id="$(_agmsg_placement_bare_pane_id "$_claim_ref" 2>/dev/null)" || _want_id=""
-      if [ -n "$sid" ] && [ -n "$_want_id" ]; then
+      if true; then
         local _mine_spawn="" _claimant_here="unknown"
         _mine_spawn="$(agmsg_spawn_path "$team" "$agent" 2>/dev/null)" || _mine_spawn=""
         if [ -n "$_mine_spawn" ]; then
           _rival_spawn="$(dirname "$_mine_spawn")/spawn.$_claimed_by"
           _claimant_here="$(_agmsg_placement_claimant_here_now "$_rival_spawn" "$_claim_ref" 2>/dev/null)" || _claimant_here="unknown"
-          if [ "$_claimant_here" = not_here ] && declare -F terminal_session_live >/dev/null 2>&1; then
+          # A record whose team no longer exists on disk is an older placement,
+          # not a peer: unless its owner is confirmed to be in this very pane,
+          # the seat acting now takes the pane and the old record is dropped.
+          # Undecidable counts as not confirmed. Only a suffix that splits into
+          # exactly one team and one agent, by name, can be judged this way; an
+          # id-keyed record or an ambiguous suffix keeps the stricter rule below.
+          if [ "$_claimant_here" != here ]; then
+            local _cb_team="${_claimed_by%%__*}" _cb_rest="${_claimed_by#*__}" _cb_t _cb_exists=0
+            case "$_cb_rest" in
+              *__*|"") ;;
+              *)
+                case "$_cb_team" in
+                  ????????-????-????-????-????????????) ;;
+                  "$(_actas_lock_encode "$team")") ;;
+                  *)
+                    for _cb_t in "$(dirname "$(dirname "$_mine_spawn")")"/teams/*/; do
+                      [ -d "$_cb_t" ] || continue
+                      _cb_t="${_cb_t%/}"; _cb_t="${_cb_t##*/}"
+                      [ "$(_actas_lock_encode "$_cb_t")" = "$_cb_team" ] && { _cb_exists=1; break; }
+                    done
+                    [ "$_cb_exists" -eq 0 ] && _took_over=1 ;;
+                esac ;;
+            esac
+          fi
+          if [ "$_took_over" -eq 0 ] && [ -n "$sid" ] && [ -n "$_want_id" ] && [ "$_claimant_here" = not_here ] && declare -F terminal_session_live >/dev/null 2>&1; then
             local _mine_live="" _tab
             _tab="$(printf '\t')"
             _mine_live="$(terminal_session_live "$sid" 2>/dev/null)" || _mine_live=""
@@ -1468,6 +1497,9 @@ agmsg_terminal_name_self() {
         fi
         declare -F agmsg_role_session_clear_named_at >/dev/null 2>&1 \
           && agmsg_role_session_clear_named_at "$_role_path" 2>/dev/null
+        # The old record goes, so it does not warn again on the next action.
+        rm -f "$_rival_spawn"
+        echo "agmsg: dropped the older placement record $_claimed_by, which pointed at this seat's pane." >&2
         # Fall through: this pane is this seat's to name/mark/record now.
       else
         # A claimant whose name ends in THIS seat's name may be this seat under a

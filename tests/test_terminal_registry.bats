@@ -3695,11 +3695,10 @@ _tmux_op_args() {
   refute test -e "$mine"
 }
 
-@test "placement guard: this seat's record under a VANISHED team blocks it (closed) and the message names the file to remove (#1114 review)" {
-  # The exact rule builds this agent's record path for each team on disk. A team
-  # dropped with its run/ record left behind has no path to build, so that
-  # record reads as a rival: fail-closed, and the refusal must say the way out
-  # is the file, since "drop or despawn" points at this seat itself.
+@test "placement guard: a record under a VANISHED team is dropped and the seat acting now is recorded, without a warning" {
+  # A team dropped with its run/ record left behind: the record is older than
+  # any seat now acting, so it is replaced rather than left to warn on every
+  # action. A claimant whose team still exists keeps the guard (control below).
   _install_fake_tmux
   export PATH="$FAKEBIN:$PATH"
   export TMUX="/tmp/fake,1,0" TMUX_PANE="%1"
@@ -3714,11 +3713,9 @@ _tmux_op_args() {
   : > "$ARGV_LOG"
   run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record
   [ "$status" -eq 0 ]
-  grep -q 'did not name or record' <<<"$output"
-  grep -q "recorded as gone__alice's" <<<"$output"
-  grep -q 'remove run/spawn.gone__alice' <<<"$output"
-  refute grep -qE '\[set-option\]|\[select-pane\]' "$ARGV_LOG"
-  refute test -e "$mine"
+  refute grep -q 'did not name or record' <<<"$output"
+  refute test -e "$stale"
+  grep -q '^tmux:/tmp/fake:%1	/proj/MINE	claude-code$' "$mine"
 
   # Control: a genuine other seat gets no such hint.
   rm -f "$stale"
