@@ -96,3 +96,13 @@ jobs:
         run: |
           schtasks.exe //Query //FO LIST 2>&1 | grep -i -B2 -A8 agmsgd || echo "no agmsgd task listed"
           true
+      - name: Trace daemon enable
+        if: always()
+        run: |
+          S="$HOME/.agents/skills/agmsg/scripts"
+          set +e +o pipefail
+          bash -x "$S/daemon.sh" enable > "$RUNNER_TEMP/enable.trace" 2>&1
+          echo "exit=$?"
+          grep -n "mkfifo\|sqlite3 -batch\|ATTACH\|LOCKED\|read -r\|return 1\|SIGPIPE\|exit" "$RUNNER_TEMP/enable.trace" | tail -40
+          echo ---- last 60 lines; tail -60 "$RUNNER_TEMP/enable.trace"
+          true
