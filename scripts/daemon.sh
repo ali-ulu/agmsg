@@ -94,6 +94,16 @@ _install_generation() {
 # acquisition and rechecked while the lock is held, so an upgrade between
 # those points cannot register an obsolete launcher.
 _with_op_lock() {
+  # A lock helper that exits early must show up as "could not acquire", not as
+  # this shell dying silently on a write to a closed pipe (exit 141).
+  trap '' PIPE
+  local rc=0
+  _with_op_lock_run "$@" || rc=$?
+  trap - PIPE
+  return "$rc"
+}
+
+_with_op_lock_run() {
   local statements="$1" expected_generation current_generation ready applied lock_pid attach_path lock_dir
   local AGMSGD_LOCK_INSTALL_ID
   shift
@@ -104,10 +114,20 @@ _with_op_lock() {
   AGMSGD_LOCK_INSTALL_ID="${expected_generation%%:*}"
   lock_dir="$(mktemp -d "$SKILL_DIR/run/daemon-op-lock.XXXXXX")" || return 1
   mkfifo "$lock_dir/in" "$lock_dir/out"
-  sqlite3 -batch "$LOCK_DB" < "$lock_dir/in" > "$lock_dir/out" 3>&- 4>&- &
-  lock_pid=$!
-  exec 8> "$lock_dir/in"
-  exec 9< "$lock_dir/out"
+  if [ "$(_os)" = windows ]; then
+    # On Windows (MSYS) a FIFO opened for reading with no writer yet reads as
+    # end-of-file, so sqlite3 would quit before it got a single line. Hold
+    # both ends open here first so its opens never wait on, or race with, ours.
+    exec 8<> "$lock_dir/in"
+    exec 9<> "$lock_dir/out"
+    sqlite3 -batch "$LOCK_DB" < "$lock_dir/in" > "$lock_dir/out" 3>&- 4>&- &
+    lock_pid=$!
+  else
+    sqlite3 -batch "$LOCK_DB" < "$lock_dir/in" > "$lock_dir/out" 3>&- 4>&- &
+    lock_pid=$!
+    exec 8> "$lock_dir/in"
+    exec 9< "$lock_dir/out"
+  fi
   attach_path="$(agmsg_sql_readfile_path "$INSTALL_DB")"
   printf '%s\n' '.bail on' "ATTACH DATABASE '$attach_path' AS installdb;" 'BEGIN EXCLUSIVE;' '.print LOCKED' >&8
   if ! IFS= read -r -t 10 ready <&9 || [ "$ready" != "LOCKED" ]; then
