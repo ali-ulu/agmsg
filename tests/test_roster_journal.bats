@@ -155,6 +155,48 @@ config_field() {
         AND json_extract(event,'\$.to')='carol';")" -eq 1 ]
 }
 
+@test "rename carries a name-only legacy team's placement record to the new name, replacing a stale one (#1403)" {
+  # A journaled team's placement path is keyed by member_id (#1023), which
+  # already survives a rename on its own -- the bug this covers is specific
+  # to a name-only legacy team (no roster.jsonl), where the path is purely
+  # name-keyed and the rename has nothing else carrying it over.
+  mkdir -p "$TEST_SKILL_DIR/teams/legacy"
+  printf '%s\n' \
+    '{"name":"legacy","agents":{"alice":{"type":"claude-code","project":"/tmp/a"}}}' \
+    > "$TEST_SKILL_DIR/teams/legacy/config.json"
+
+  # A stale placement record already sitting under the NEW name, left by
+  # some unrelated former member no longer in the roster (#1403's own
+  # reproduction: a dead tmux pane from months earlier). Computed through
+  # agmsg_spawn_path itself -- the exact path a real reader (team.sh,
+  # send.sh's #1114 guard) resolves -- rather than assuming its on-disk
+  # naming scheme.
+  local alice_spawn carol_spawn
+  (
+    export SKILL_DIR="$TEST_SKILL_DIR"
+    # shellcheck disable=SC1090
+    source "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    agmsg_spawn_path legacy alice > "$TEST_SKILL_DIR/alice_spawn_path"
+    agmsg_spawn_path legacy carol > "$TEST_SKILL_DIR/carol_spawn_path"
+  )
+  alice_spawn="$(cat "$TEST_SKILL_DIR/alice_spawn_path")"
+  carol_spawn="$(cat "$TEST_SKILL_DIR/carol_spawn_path")"
+  mkdir -p "$(dirname "$alice_spawn")"
+  printf 'herdr:sock:pA\t/tmp/a\tclaude-code\n' > "$alice_spawn"
+  printf 'tmux:%%9\t/tmp/long-gone\tclaude-code\n' > "$carol_spawn"
+
+  bash "$SCRIPTS/rename.sh" legacy alice carol
+
+  [ "$(config_field "$TEST_SKILL_DIR/teams/legacy/config.json" '$.agents.carol.type')" = claude-code ]
+
+  # alice's record moved to carol's path, overwriting the stale leftover --
+  # never left behind under the old name, never left alongside it under the
+  # new one.
+  [ ! -e "$alice_spawn" ]
+  [ -f "$carol_spawn" ]
+  grep -qF 'herdr:sock:pA' "$carol_spawn"
+}
+
 @test "concurrent renames accept only the first event whose from name is current" {
   bash "$SCRIPTS/join.sh" demo alice claude-code /tmp/a
   local team_dir="$TEST_SKILL_DIR/teams/demo"

@@ -5,12 +5,13 @@ set -euo pipefail
 #
 # Renames an agent in team config and updates all messages in DB.
 #
-# It deliberately does NOT touch run/. Those files are runtime state, not a
-# record of the team: `actas.<team>__<agent>.session` (the exclusivity lock),
-# `role-session.<team>__<agent>`, `ready.<team>__<agent>`, and the codex bridge's
-# `codex-bridge.<team>.<agent>.*`. Thirteen files read them between them, and
-# rewriting the state of a process that is currently running, because its name
-# changed, is a good way to break the one thing that was working.
+# It deliberately does NOT touch most of run/. Those files are runtime state,
+# not a record of the team: `actas.<team>__<agent>.session` (the exclusivity
+# lock), `role-session.<team>__<agent>`, `ready.<team>__<agent>`, and the codex
+# bridge's `codex-bridge.<team>.<agent>.*`. Thirteen files read them between
+# them, and rewriting the state of a process that is currently running,
+# because its name changed, is a good way to break the one thing that was
+# working.
 #
 # What that leaves behind is orphans under the old name. They are harmless:
 # nothing is running under that name to read them, and the next start writes
@@ -21,17 +22,34 @@ set -euo pipefail
 # Written down because two renames in a row produced the same leftovers and the
 # second person asked whether it was intended. It is. A bulk rename would
 # multiply them, and nobody should have to rediscover that it was a choice.
+#
+# The ONE exception is the placement record (`spawn.<team>__<agent>`, see
+# agmsg_spawn_path): unlike the files above, this one is looked up by OTHER
+# members under the member's CURRENT roster name (team.sh, the #1114 guard in
+# send.sh), not by the process that is still running under the old name. Left
+# under the old name, it goes invisible the moment the rename lands, and a
+# stale record that happens to already sit at the new name (a past, unrelated
+# member that used to have it, now gone from the roster) wins instead (#1403).
+# So this one record is moved to the new name below, after the roster update
+# the checks above already confirmed as the only way NEW_NAME could be legal:
+# any record found at the new name belongs to no one in the roster (spawn.sh
+# only ever writes one after pre-joining), so it is replaced unconditionally,
+# with no liveness check of its own.
 
 TEAM="${1:?Usage: rename.sh <team> <old_name> <new_name>}"
 OLD_NAME="${2:?Missing old agent name}"
 NEW_NAME="${3:?Missing new agent name}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"  # actas-lock.sh requires SKILL_DIR
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/registry-lock.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/roster-journal.sh"
+# For agmsg_spawn_path, used below to carry the placement record over.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/actas-lock.sh"
 # Reject team names that would escape teams/ as a path segment (#140).
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/validate.sh"
@@ -158,6 +176,27 @@ fi
 if [ "$(agmsg_storage_driver)" = jsonl ]; then
   agmsg_storage_load
   storage_rename_agent "$TEAM" "$OLD_NAME" "$NEW_NAME" >/dev/null
+fi
+
+# --- Carry the placement record over (#1403) --------------------------------
+# See the header comment for why this one file is the exception. NEW_NAME was
+# already confirmed not to be in the roster above, so whatever sits at its
+# placement path (if anything) is a leftover from an unrelated former member,
+# never a live claim -- no liveness check needed, just an unconditional
+# replace. agmsg_spawn_path's own rc 1 (SKILL_DIR unresolved, or both an
+# id-keyed and legacy file already colliding) is left alone rather than
+# treated as "no path": acting on a guessed path here would risk exactly the
+# double-record state the comment in actas-lock.sh refuses to resolve.
+OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
+NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
+if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
+  if [ -n "$NEW_SPAWN_PATH" ]; then
+    mv -f "$OLD_SPAWN_PATH" "$NEW_SPAWN_PATH"
+  fi
+elif [ -n "$NEW_SPAWN_PATH" ] && [ -f "$NEW_SPAWN_PATH" ]; then
+  # OLD had no placement record of its own -- the one under NEW_NAME is
+  # still someone else's leftover, not something to inherit as-is.
+  rm -f "$NEW_SPAWN_PATH"
 fi
 
 agmsg_lock_release
