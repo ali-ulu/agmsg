@@ -449,9 +449,9 @@ EOF
   [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "off" ]
   # (b) a newer enable lands while disable waits: its service is left alone.
   sqlite3 "$db" "UPDATE daemon_intent SET desired='on';"
-  DB="$db" run bash -c 'set -u; source "$1"; _unregister() { echo unregistered >> "$2"; }
+  DB="$db" MARKER="$TEST_SKILL_DIR/unregistered" run bash -c 'set -u; source "$1"; _unregister() { echo unregistered >> "$MARKER"; }
     _wait_owner_none() { sqlite3 "$DB" "UPDATE daemon_intent SET desired='"'"'on'"'"', op_gen = op_gen + 1;"; printf none; }
-    cmd_disable' _ "$fns" "$TEST_SKILL_DIR/unregistered"
+    cmd_disable' _ "$fns"
   [ "$status" -ne 0 ]
   [ ! -e "$TEST_SKILL_DIR/unregistered" ]
   [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "on" ]
