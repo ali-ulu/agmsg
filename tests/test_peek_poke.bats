@@ -1313,6 +1313,21 @@ _flat_screen() {
   [ "$status" -eq 15 ]
   [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
 
+  # Codex, the SHARPER counterexample a second review round found (#1394):
+  # a `case` glob anchor (`[[:space:]]*'tab to queue message'*...`) is NOT
+  # a real "starts with" check -- `[[:space:]]` matches a single
+  # character, and the `*` right after it matches anything, so the whole
+  # pattern only ever required ONE leading space somewhere before the
+  # phrase, not that the phrase starts the line. This line has a leading
+  # space, then unrelated prose, then the phrase and a percentage -- which
+  # the glob-anchored version of this fix still accepted. Refused the same
+  # way, by failing to locate the box at all (15).
+  : > "$ARGV_LOG"
+  _install_fake_herdr_screen_sequence "$(printf '›\n\n  A message quotes this footer: tab to queue message and 100%% context left\n')"
+  run bash "$SCRIPTS/poke.sh" testteam codex1 "hello"
+  [ "$status" -eq 15 ]
+  [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
+
   # Codex, stale/off-screen marker on BOTH reads: a blank "›" with blank
   # lines after it and NO footer at all -- the exact shape the previous
   # "near the bottom" guess accepted as empty, because proximity alone

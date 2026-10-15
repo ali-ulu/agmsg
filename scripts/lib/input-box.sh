@@ -228,22 +228,47 @@ _agmsg_input_box_raw_boxed() {
 # line that merely MENTIONS both phrases in prose -- e.g. `A message quoted
 # "tab to queue" and "context left" as examples.` -- passed it too, which
 # is exactly the kind of decorative/quoted text this whole function exists
-# to refuse. The MEASURED footer's actual SHAPE is what is anchored
-# instead: it (past any leading padding -- the live capture left-indents
-# this line, unlike the phrase embedded mid-sentence) starts with the
-# literal phrase "tab to queue message" and ENDS the line with a
-# percentage ("<digits>% context left") -- a sentence merely discussing
-# the phrase does not have it start and end the line this way. Glob `*`
-# matches ZERO OR MORE of anything, but `[[:space:]]*` is a single
-# required whitespace char followed by that -- there is no "zero or more
-# of a class" repetition in a plain case pattern, which is why the leading
-# padding is required-at-least-one rather than optional (measured padding
-# is never actually zero) and why no symmetric trailing one is attempted:
-# it would have the same one-or-more shape, wrongly refusing a real footer
-# with no trailing padding at all.
+# to refuse. Anchoring with a `case` glob (`[[:space:]]*'tab to queue
+# message'*...`) was tried next and was STILL wrong, for a sharper reason
+# than just being loose (review, round 2): `[[:space:]]` is a single
+# required whitespace CHARACTER, and the `*` right after it matches
+# anything at all -- so that pattern reads as "one leading space,
+# somewhere followed eventually by the phrase", never "the line STARTS
+# with the phrase". A line like `  A message quotes this footer: tab to
+# queue message and 100% context left` still has a leading space, so it
+# still matched. There is no "zero-or-more of a class" repetition
+# available in a plain glob at all, which is why this is done by
+# PARAMETER EXPANSION instead, never a `case` glob: strip the line's
+# leading whitespace run first (the standard `${v%%[![:space:]]*}` /
+# `${v#...}` ltrim pair), THEN require the result to literally START
+# with "tab to queue message" via a prefix `case`, THEN strip that prefix
+# and confirm what is left ends in the literal suffix "% context left",
+# THEN confirm everything between the two (after ALSO ltrimming it, for
+# the padding before the percentage) is digits and nothing else -- never a
+# single trailing `[0-9]`, which only ever checked the final digit and let
+# "100%" 's leading "10" through unexamined.
 # Located on the STYLE-STRIPPED derived copy, same reason as the boxed
 # check above; without either form, refuse. Echoes the marker line's own
 # raw content (single line), styling intact.
+_agmsg_input_box_flat_typing_footer() {   # <one plain, style-stripped line>
+  local line="$1" stripped rest digits
+  stripped="${line#"${line%%[![:space:]]*}"}"
+  case "$stripped" in
+    'tab to queue message'*) ;;
+    *) return 1 ;;
+  esac
+  rest="${stripped#'tab to queue message'}"
+  case "$rest" in
+    *'% context left') ;;
+    *) return 1 ;;
+  esac
+  digits="${rest%'% context left'}"
+  digits="${digits#"${digits%%[![:space:]]*}"}"
+  case "$digits" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  return 0
+}
 _agmsg_input_box_raw_flat() {
   local marker="$1" screen="$2"
   local -a lines=() plain=()
@@ -276,8 +301,8 @@ _agmsg_input_box_raw_flat() {
     *[![:space:]]*) return 1 ;;
   esac
   case "${plain[$footer_idx]}" in
-    *·*|[[:space:]]*'tab to queue message'*[0-9]'% context left') ;;
-    *) return 1 ;;
+    *·*) ;;
+    *) _agmsg_input_box_flat_typing_footer "${plain[$footer_idx]}" || return 1 ;;
   esac
 
   printf '%s\n' "${lines[$marker_idx]}"
