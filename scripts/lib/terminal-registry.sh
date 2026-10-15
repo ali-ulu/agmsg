@@ -1453,10 +1453,16 @@ agmsg_terminal_name_self() {
           # id-keyed record or an ambiguous suffix keeps the stricter rule below.
           if [ "$_claimant_here" != here ]; then
             local _cb_team="${_claimed_by%%__*}" _cb_rest="${_claimed_by#*__}" _cb_t _cb_exists=0
+            # No separator at all leaves both halves equal to the whole name.
+            case "$_claimed_by" in *__*) ;; *) _cb_rest="" ;; esac
+            # Only positive evidence counts: a teams directory that cannot be
+            # listed proves nothing about which teams exist.
+            ls -1 "$(dirname "$(dirname "$_mine_spawn")")/teams" >/dev/null 2>&1 || _cb_rest=""
             case "$_cb_rest" in
               *__*|"") ;;
               *)
                 case "$_cb_team" in
+                  "") ;;
                   ????????-????-????-????-????????????) ;;
                   "$(_actas_lock_encode "$team")") ;;
                   *)
@@ -1510,7 +1516,7 @@ agmsg_terminal_name_self() {
           *"__$(_actas_lock_encode "$agent")")
             _self_hint=" If '$_claimed_by' is this seat under a team that no longer exists, remove run/spawn.$_claimed_by." ;;
         esac
-        echo "agmsg: did not name or record this pane: this seat resolved $_claim_ref, and that pane is already recorded as $_claimed_by's. Keeping that seat's name and record. If that seat is gone, drop or despawn it and act again.$_self_hint (#1114 placement guard, kept alongside #1112's label-first resolution.)" >&2
+        echo "agmsg: did not name or record this pane: this seat resolved $_claim_ref, and that pane is already recorded as $_claimed_by's. Keeping that seat's name and record. To keep this seat instead, drop or despawn that seat (or remove run/spawn.$_claimed_by) and act again.$_self_hint (#1114 placement guard, kept alongside #1112's label-first resolution.)" >&2
         return 0
       fi
     fi

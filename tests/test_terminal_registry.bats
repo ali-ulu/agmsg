@@ -3723,7 +3723,23 @@ _tmux_op_args() {
   printf 'tmux:/tmp/fake:%%1\t/proj/PEER\tclaude-code\n' > "$rival"
   run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record
   grep -q "recorded as seatteam__bob's" <<<"$output"
-  refute grep -q 'remove run/spawn' <<<"$output"
+  refute grep -q 'no longer exists' <<<"$output"
+
+  # No proof the team is gone, no drop: a name without a team/agent split, and
+  # a teams directory that cannot be listed, both keep the claimant.
+  rm -f "$rival"
+  local nosplit; nosplit="$(dirname "$mine")/spawn.unsplittable"
+  printf 'tmux:/tmp/fake:%%1\t/proj/PEER\tclaude-code\n' > "$nosplit"
+  run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record
+  grep -q "recorded as unsplittable's" <<<"$output"
+  test -e "$nosplit"
+  rm -f "$nosplit"
+  printf 'tmux:/tmp/fake:%%1\t/proj/PEER\tclaude-code\n' > "$stale"
+  chmod 111 "$SKILL_DIR/teams"
+  run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record
+  chmod 755 "$SKILL_DIR/teams"
+  grep -q "recorded as gone__alice's" <<<"$output"
+  test -e "$stale"
 }
 
 @test "placement guard: a claimant whose session is confirmed gone lets a live seat take the pane; a claimant still there still refuses (#1485)" {
