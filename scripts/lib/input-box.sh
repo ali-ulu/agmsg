@@ -211,10 +211,24 @@ _agmsg_input_box_raw_boxed() {
 #   › Ask Codex to do anything
 #
 #     gpt-5.6-sol low · ~/projects/esota/agmsg-dev · task
-# That triplet is required to confirm this is the LIVE box at all (located
-# on the STYLE-STRIPPED derived copy, same reason as the boxed check above);
-# without it, refuse. Echoes the marker line's own raw content (single
-# line), styling intact.
+#
+# That is Codex's IDLE footer only, though (#1394). Once real text is
+# actually sitting in the box, the footer's own shape changes -- measured
+# live, throwaway tmux session, real `codex` CLI (#1394's own repro): no
+# "·" appears anywhere in it.
+#   › a real draft
+#
+#     tab to queue message                            100% context left
+# Both forms are accepted as proof of the live widget -- the ORIGINAL
+# purpose (#1321: refuse a stale "›" with nothing live behind it) only
+# needs SOME specific, non-decorative footer text, not that specific text;
+# matching on BOTH "tab to queue" and "context left" together (not either
+# alone) keeps this as narrow a signature as the idle footer's "·" already
+# is, rather than opening the door to a shorter substring a quoted
+# transcript line could plausibly contain. Located on the
+# STYLE-STRIPPED derived copy, same reason as the boxed check above;
+# without either form, refuse. Echoes the marker line's own raw content
+# (single line), styling intact.
 _agmsg_input_box_raw_flat() {
   local marker="$1" screen="$2"
   local -a lines=() plain=()
@@ -246,7 +260,10 @@ _agmsg_input_box_raw_flat() {
   case "$(_agmsg_strip_decorative_braille "${plain[$((marker_idx + 1))]}")" in
     *[![:space:]]*) return 1 ;;
   esac
-  case "${plain[$footer_idx]}" in *·*) ;; *) return 1 ;; esac
+  case "${plain[$footer_idx]}" in
+    *·*|*'tab to queue'*'context left'*) ;;
+    *) return 1 ;;
+  esac
 
   printf '%s\n' "${lines[$marker_idx]}"
   return 0
