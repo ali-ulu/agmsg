@@ -3744,8 +3744,12 @@ _tmux_op_args() {
   # The record is re-read before it is dropped: one that moved to another pane
   # while the owner was being looked up is not the record that was judged.
   chmod 755 "$SKILL_DIR/teams"
+  # The record moves during the LAST owner lookup, the one right before removal.
   _agmsg_placement_claimant_here_now() {
-    printf 'tmux:/tmp/fake:%%2\t/proj/LIVE\tclaude-code\n' > "$stale"
+    if [ -e "$BATS_TEST_TMPDIR/asked" ]; then
+      printf 'tmux:/tmp/fake:%%2\t/proj/LIVE\tclaude-code\n' > "$stale"
+    fi
+    : > "$BATS_TEST_TMPDIR/asked"
     echo unknown
   }
   run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record

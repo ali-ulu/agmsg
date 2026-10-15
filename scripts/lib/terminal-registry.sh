@@ -1492,10 +1492,15 @@ agmsg_terminal_name_self() {
       # changed meanwhile is refused like any other claim.
       if [ "$_took_over" -eq 1 ]; then
         local _recheck="" _recheck_rc=0
-        _recheck="$(_agmsg_placement_claimed_by "$_claim_ref" "$team" "$agent")" || _recheck_rc=$?
-        if [ "$_recheck_rc" -ne 0 ] || [ "$_recheck" != "$_claimed_by" ] \
-           || [ "$(_agmsg_placement_claimant_here_now "$_rival_spawn" "$_claim_ref" 2>/dev/null)" = here ]; then
+        # The slow question first, the record re-read last: nothing slow sits
+        # between the re-read and the removal.
+        if [ "$(_agmsg_placement_claimant_here_now "$_rival_spawn" "$_claim_ref" 2>/dev/null)" = here ]; then
           _took_over=0
+        else
+          _recheck="$(_agmsg_placement_claimed_by "$_claim_ref" "$team" "$agent")" || _recheck_rc=$?
+          if [ "$_recheck_rc" -ne 0 ] || [ "$_recheck" != "$_claimed_by" ]; then
+            _took_over=0
+          fi
         fi
       fi
       if [ "$_took_over" -eq 1 ]; then
