@@ -21,6 +21,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install sqlite3 (Windows runner has none)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install sqlite -y --no-progress
       - name: Environment
         run: |
           uname -a; node -v; npm -v; bash --version | head -1
@@ -31,6 +35,9 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
         run: |
           S="$HOME/.agents/skills/agmsg/scripts"
+          REPO="$WORK"
+          WORK="$RUNNER_TEMP/work"; mkdir -p "$WORK/other"
+          command -v sqlite3 || echo "sqlite3 NOT on PATH"
           step() { echo; echo "::group::$*"; echo "\$ $*"; "$@"; echo "[exit=$?]"; echo "::endgroup::"; }
           show() {
             echo; echo "=== $* ==="
@@ -39,15 +46,18 @@ jobs:
           }
           case "$SCENARIO" in
             fresh-rc1)
+              cd "$WORK"
               show npx --yes agmsg@1.6.0-rc.1 install
               ;;
             update-from-153)
+              cd "$WORK"
               show npx --yes agmsg@1.5.3 install
-              show bash "$S/join.sh" ci seat1 claude-code "$PWD"
+              show bash "$S/join.sh" ci seat1 claude-code "$WORK"
               show npx --yes agmsg@1.6.0-rc.1 install --update
               ;;
             fresh-head)
-              show bash ./install.sh
+              show bash "$REPO/install.sh"
+              cd "$WORK"
               ;;
           esac
           echo; echo "=== version ==="; show bash "$S/version.sh"
@@ -56,9 +66,9 @@ jobs:
           run_agmsg daemon enable
           run_agmsg daemon status
           if [ "$SCENARIO" != update-from-153 ]; then
-            show bash "$S/join.sh" ci seat1 claude-code "$PWD"
+            show bash "$S/join.sh" ci seat1 claude-code "$WORK"
           fi
-          show bash "$S/join.sh" ci seat2 claude-code "$PWD/other"
+          show bash "$S/join.sh" ci seat2 claude-code "$WORK/other"
           show bash "$S/send.sh" ci seat1 seat2 'hello from seat1'
           show bash "$S/inbox.sh" ci seat2
           run_agmsg daemon status
