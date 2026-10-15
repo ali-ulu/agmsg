@@ -62,42 +62,17 @@ export function bootId() {
 
 // A darwin record written before bootId() moved to kern.bootsessionuuid holds
 // kern.boottime seconds. The kernel shifts that value whenever the wall clock
-// is stepped, so it is compared with a tolerance instead of for equality.
-// That is only a hint of the same boot, not proof: a restart within the
-// tolerance would match too.
-// true / false, or null when kern.boottime cannot be read (cannot tell).
-function legacyBootMatches(recorded) {
-  if (platform() !== "darwin" || !/^\d+$/.test(String(recorded))) return false;
-  try {
-    const out = execFileSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" });
-    const m = out.match(/sec\s*=\s*(\d+)/);
-    return m === null ? null : Math.abs(Number(m[1]) - Number(recorded)) <= 600;
-  } catch {
-    return null;
-  }
+// is stepped, so it can neither be compared for equality nor be trusted as
+// proof of the same boot: such a record is "cannot tell" while its pid still
+// exists.
+function isOldDarwinBootId(recorded) {
+  return platform() === "darwin" && /^\d+$/.test(String(recorded));
 }
 
 // true / false / null (cannot tell) for "`recorded` is this boot's id".
 export function sameBoot(recorded) {
-  return bootId() === recorded ? true : legacyBootMatches(recorded);
-}
-
-// true when `pid` started no later than `claimedAt` (an ISO time), false when
-// it started after it (a reused pid, never the recorded executor), null when
-// either time cannot be read.
-function startedBeforeClaim(pid, claimedAt) {
-  try {
-    const lstart = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C" },
-    }).trim();
-    const started = Date.parse(lstart);
-    const claimed = Date.parse(claimedAt);
-    if (!Number.isFinite(started) || !Number.isFinite(claimed)) return null;
-    return started <= claimed;
-  } catch {
-    return null;
-  }
+  if (bootId() === recorded) return true;
+  return isOldDarwinBootId(recorded) ? null : false;
 }
 
 // This process's own executor triple, as of the call. `role` and `pid` are
@@ -117,13 +92,9 @@ export function currentExecutor() {
 // (confirmed dead) without even checking the pid -- this is the one case
 // where a stale boot id is itself the proof, not a reason to say "cannot
 // tell".
-export function isAlive({ pid, bootId: capturedBootId, startedAt }) {
-  const legacy = bootId() !== capturedBootId;
-  // Only an old-format darwin record gets past a differing boot id.
-  if (legacy) {
-    const match = legacyBootMatches(capturedBootId);
-    if (match !== true) return match;
-  }
+export function isAlive({ pid, bootId: capturedBootId }) {
+  const sameBootId = sameBoot(capturedBootId);
+  if (sameBootId === false) return false;
   try {
     process.kill(pid, 0);
   } catch (error) {
@@ -135,8 +106,6 @@ export function isAlive({ pid, bootId: capturedBootId, startedAt }) {
     // genuine "cannot tell" (e.g. a platform where signal 0 is unsupported).
     if (error?.code !== "EPERM") return null;
   }
-  // An old-format record is only a hint of the same boot, so the live
-  // process must also predate the recorded claim.
-  if (legacy) return startedBeforeClaim(pid, startedAt);
-  return true;
+  // The pid exists, but an old-format record cannot say it is the same boot.
+  return sameBootId === null ? null : true;
 }

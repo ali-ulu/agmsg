@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { bootId, currentExecutor, isAlive } from "../scripts/daemon/executor.mjs";
@@ -26,36 +23,18 @@ test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apa
   // confirmed dead even for this process's own (very much alive) pid --
   // no pid from a different boot can still be running.
   assert.equal(
-    isAlive({ pid: self.pid, bootId: "0" }),
+    isAlive({ pid: self.pid, bootId: "another-boot" }),
     false,
     "a mismatched boot id must read as confirmed dead regardless of the pid",
   );
 
   if (process.platform === "darwin") {
-    // A record from when the boot id was kern.boottime seconds, shifted a
-    // few seconds since by a clock adjustment, is still this boot -- but
-    // only for a process older than the recorded claim (a pid born after
-    // it is a reuse, e.g. after a quick restart).
+    // A record from when the boot id was kern.boottime seconds cannot be
+    // matched against this boot (the kernel shifts that value with clock
+    // adjustments): cannot tell while its pid exists, dead once it is gone.
     const boottime = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" }).stdout;
     const legacy = String(Number(boottime.match(/sec\s*=\s*(\d+)/)[1]) - 3);
-    const now = new Date().toISOString();
-    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: now }), true);
-    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: "2000-01-01T00:00:00.000Z" }), false);
-    // No usable claim time: cannot tell, which must never read as dead.
-    assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: null }), null);
-    // kern.boottime unreadable: also cannot tell.
-    const shimDir = mkdtempSync(join(tmpdir(), "sysctl-shim-"));
-    writeFileSync(
-      join(shimDir, "sysctl"),
-      '#!/bin/sh\n[ "$2" = kern.boottime ] && exit 1\nexec /usr/sbin/sysctl "$@"\n',
-    );
-    chmodSync(join(shimDir, "sysctl"), 0o755);
-    const savedPath = process.env.PATH;
-    process.env.PATH = `${shimDir}:${savedPath}`;
-    try {
-      assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: now }), null);
-    } finally {
-      process.env.PATH = savedPath;
-    }
+    assert.equal(isAlive({ pid: self.pid, bootId: legacy }), null);
+    assert.equal(isAlive({ pid: dead.pid, bootId: legacy }), false);
   }
 });

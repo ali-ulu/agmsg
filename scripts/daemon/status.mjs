@@ -33,6 +33,14 @@ const STARTING_STOPPING_GRACE_MS = 30_000;
 export function classify({ owner, intent, alive, reachable, lastAttempt }, now = Date.now()) {
   const desired = intent?.desired ?? null;
 
+  if (desired === "on" && owner.state === "ready" && alive === null) {
+    return {
+      text: "agmsgd's record cannot confirm that it is still running (it may have been written by an older version). Run agmsg daemon stop and then agmsg daemon start to refresh it. Unread messages are preserved.",
+      exitCode: 1,
+      gen: owner.gen,
+    };
+  }
+
   if (desired === "on" && !(owner.state === "ready" && alive === true && reachable)) {
     const reason = lastAttempt?.reason ?? owner.last_end_reason ??
       (owner.state === "ready" ? "executor or control socket unavailable" : owner.state);
