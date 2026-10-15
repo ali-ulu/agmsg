@@ -3740,6 +3740,17 @@ _tmux_op_args() {
   chmod 755 "$SKILL_DIR/teams"
   grep -q "recorded as gone__alice's" <<<"$output"
   test -e "$stale"
+
+  # The record is re-read before it is dropped: one that moved to another pane
+  # while the owner was being looked up is not the record that was judged.
+  chmod 755 "$SKILL_DIR/teams"
+  _agmsg_placement_claimant_here_now() {
+    printf 'tmux:/tmp/fake:%%2\t/proj/LIVE\tclaude-code\n' > "$stale"
+    echo unknown
+  }
+  run agmsg_terminal_name_self "" seatteam alice /proj/MINE claude-code record
+  test -e "$stale"
+  grep -q '%2' "$stale"
 }
 
 @test "placement guard: a claimant whose session is confirmed gone lets a live seat take the pane; a claimant still there still refuses (#1485)" {
