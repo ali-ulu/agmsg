@@ -580,6 +580,11 @@ test('Codex channel queues one unread snapshot and confirms it before advancing 
   assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'pending', 'a group that may still write keeps the old reservation');
   assert.deepEqual(sentThreads, []);
   groupState = 'absent';
+  installDb.prepare("UPDATE beta_codex_queue SET children = 'incomplete' WHERE nonce = 'old-thread-nonce'").run();
+  await staleChannel.pollOnce();
+  assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'pending', 'a reservation that never recorded its child keeps the old one');
+  assert.deepEqual(sentThreads, []);
+  installDb.prepare("UPDATE beta_codex_queue SET children = ? WHERE nonce = 'old-thread-nonce'").run(unwitnessed);
   await staleChannel.pollOnce();
   assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'expired');
   assert.deepEqual(sentThreads, [thread], 'the nudge goes to the thread the seat names now');

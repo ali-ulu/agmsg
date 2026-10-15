@@ -244,7 +244,7 @@ function bridgeState(runDir, team, agent, projects) {
 // crash before the child result was recorded cannot safely be retried here.
 async function pendingObservation(pending, now, observeGroup) {
   let children;
-  try { children = JSON.parse(pending.children); } catch { return { state: "pending", reason: "child_group_record_unreadable" }; }
+  try { children = JSON.parse(pending.children); } catch { return { state: "pending", reason: "child_group_record_unreadable", childrenUnresolved: true }; }
   if (children.state === "incomplete") return { state: "pending", reason: "queue_child_state_incomplete", childrenUnresolved: true };
   if (children.state === "complete" || (children.state === "unreadable" && children.pgid !== undefined)) {
     let group;
