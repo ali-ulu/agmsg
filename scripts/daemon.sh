@@ -21,6 +21,8 @@ source "$SCRIPT_DIR/lib/daemon-state.sh"
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck source=lib/daemon-seats.sh
 source "$SCRIPT_DIR/lib/daemon-seats.sh"
+# shellcheck source=lib/install-db.sh
+source "$SCRIPT_DIR/lib/install-db.sh"
 
 _path_hint() {
   printf 'If agmsg is not found, use "%s/scripts/agmsg" daemon %s.\n' "$SKILL_DIR" "$1"
@@ -48,6 +50,17 @@ _require_install_db() {
     echo "agmsg daemon: run/install.db does not exist -- run install.sh first" >&2
     exit 1
   fi
+}
+
+# An install.db made by an older install.sh lacks meta's node columns and the
+# daemon tables; bring it up to schema.sql. Only the commands that change
+# daemon state call this -- status stays a read.
+_ensure_install_db_schema() {
+  _require_install_db
+  agmsg_install_db_apply_schema "$INSTALL_DB" "$SCRIPT_DIR/daemon/schema.sql" || {
+    echo "agmsg daemon: could not bring run/install.db up to date" >&2
+    exit 1
+  }
 }
 
 # Runs $1 (one or more SQL statements against install.db's tables,
@@ -260,13 +273,13 @@ _register_linux() {
   cat > "$unit_path" <<EOF
 [Unit]
 Description=agmsgd ($SKILL_DIR)
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 ExecStart=$LAUNCHER
 Restart=on-failure
 RestartSec=30s
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 [Install]
 WantedBy=default.target
@@ -451,7 +464,7 @@ _wait_for_ready() {
 }
 
 cmd_start() {
-  _require_install_db
+  _ensure_install_db_schema
   local state
   state="$(sqlite3 "$INSTALL_DB" "SELECT state FROM daemon_owner;")"
   if [ "$state" = "ready" ] && node "$SCRIPT_DIR/daemon/status.mjs" "$SKILL_DIR" >/dev/null 2>&1; then
@@ -509,7 +522,7 @@ _request_stop_over_socket() {
 }
 
 cmd_stop() {
-  _require_install_db
+  _ensure_install_db_schema
   # Stop takes no operation lock.
   local desired
   desired="$(sqlite3 "$INSTALL_DB" "SELECT desired FROM daemon_intent;" 2>/dev/null || true)"
@@ -543,6 +556,14 @@ cmd_status() {
       *) _usage; return 2 ;;
     esac
   done
+  local owner_tables
+  # Only a database that answers and has no daemon_owner table is "not in use
+  # yet"; a query that fails (corrupt, locked) falls through to the normal
+  # read below and is reported as unknown.
+  if owner_tables="$(sqlite3 "$INSTALL_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='daemon_owner';" 2>/dev/null)" && [ "$owner_tables" = 0 ] && [ "$json" != true ]; then
+    echo "agmsg daemon status: agmsgd is not in use yet (turn it on with 'agmsg daemon enable')"
+    return 0
+  fi
   local node_path
   node_path="$(_resolve_node node 2>/dev/null || true)"
   if [ -n "$node_path" ]; then
@@ -584,7 +605,7 @@ cmd_status() {
 }
 
 cmd_enable() {
-  _require_install_db
+  _ensure_install_db_schema
   if [ "$(_os)" = linux ] && ! _systemd_user_usable; then
     echo "agmsg daemon enable: systemd user services are not available here (systemctl --user does not work), so agmsgd cannot be registered to start on its own. Nothing was changed. 'agmsg daemon start' runs it for this session only." >&2
     _path_hint start >&2
@@ -616,12 +637,8 @@ cmd_enable() {
   cmd_start
 }
 
-cmd_disable() {
-  _require_install_db
-  _with_op_lock "UPDATE daemon_intent SET desired = 'off', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" _unregister
-  local socket
-  socket="$(sqlite3 "$INSTALL_DB" "SELECT socket FROM daemon_owner WHERE state = 'ready';" 2>/dev/null || true)"
-  _request_stop_over_socket "$socket"
+# Reads daemon_owner.state, waiting up to ~10s for it to become "none".
+_wait_owner_none() {
   local waited=0 state
   while [ "$waited" -lt 100 ]; do
     state="$(sqlite3 "$INSTALL_DB" "SELECT state FROM daemon_owner;" 2>/dev/null || true)"
@@ -629,6 +646,92 @@ cmd_disable() {
     waited=$((waited + 1))
     sleep 0.1
   done
+  printf '%s' "$state"
+}
+
+# Runs on the connection _with_op_lock holds (fds 8/9): one value from install.db.
+_lock_query() {
+  local row marker
+  printf '%s\n.print Q_END\n' "$1" >&8
+  IFS= read -r -t 10 row <&9 || return 1
+  IFS= read -r -t 10 marker <&9 || return 1
+  [ "${marker%$'\r'}" = Q_END ] || return 1
+  printf '%s' "${row%$'\r'}"
+}
+
+# Turns the intent off and records what it was and which op_gen this disable
+# owns, so the later steps touch only their own change.
+_disable_commit_intent() {
+  DISABLE_PREV_INTENT="$(_lock_query "SELECT desired FROM installdb.daemon_intent;")" || return 1
+  printf '%s\n' "UPDATE installdb.daemon_intent SET desired = 'off', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" >&8
+  DISABLE_GEN="$(_lock_query "SELECT op_gen FROM installdb.daemon_intent;")" || return 1
+}
+
+# Unregisters only while the intent is still the one this disable wrote; a
+# later enable/start owns the service now and is left alone.
+_disable_unregister_if_current() {
+  local now
+  now="$(_lock_query "SELECT desired || '|' || op_gen FROM installdb.daemon_intent;")" || return 1
+  if [ "$now" != "off|$DISABLE_GEN" ]; then
+    DISABLE_SUPERSEDED=1
+    return 0
+  fi
+  _unregister
+}
+
+# After a failed unregister: put the intent back as it was, but only if it is
+# still the one this disable wrote.
+_disable_restore_intent() {
+  local now
+  now="$(_lock_query "SELECT desired || '|' || op_gen FROM installdb.daemon_intent;")" || return 1
+  [ "$now" = "off|$DISABLE_GEN" ] || return 0
+  printf '%s\n' "UPDATE installdb.daemon_intent SET desired = '$DISABLE_PREV_INTENT', op_gen = op_gen + 1, set_by = 'disable', set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');" >&8
+}
+
+cmd_disable() {
+  _ensure_install_db_schema
+  # The daemon writes stopping -> none into install.db on its way out, so it
+  # must stop while no operation holds that database: commit the intent and
+  # release the lock first, let the daemon finish, and only then unregister
+  # the service under the lock. Stopping the service from inside the lock
+  # made the dying daemon fail with "database is locked" and left the record
+  # at ready.
+  local DISABLE_PREV_INTENT="" DISABLE_GEN="" DISABLE_SUPERSEDED=0
+  _with_op_lock "" _disable_commit_intent || return 1
+  local socket state
+  socket="$(sqlite3 "$INSTALL_DB" "SELECT socket FROM daemon_owner WHERE state = 'ready';" 2>/dev/null || true)"
+  _request_stop_over_socket "$socket"
+  state="$(_wait_owner_none)"
+  if ! _with_op_lock "" _disable_unregister_if_current; then
+    _with_op_lock "" _disable_restore_intent || true
+    return 1
+  fi
+  if [ "$DISABLE_SUPERSEDED" = 1 ]; then
+    echo "agmsg daemon disable: the service was changed by another command while disable was waiting; it was left as that command set it -- check 'agmsg daemon status'" >&2
+    return 1
+  fi
+  if [ "$state" != "none" ]; then
+    state="$(_wait_owner_none)"
+  fi
+  if [ "$state" != "none" ]; then
+    # A record written by an older version cannot be checked against this
+    # boot. Disable is the deliberate way out of it: the daemon was asked to
+    # stop above, so drop the unverifiable record instead of leaving it to
+    # block every later start.
+    local AGMSGD_DESIRED AGMSGD_HEALTH AGMSGD_REASON seen_gen seen_pid seen_boot
+    IFS='|' read -r seen_gen seen_pid seen_boot < <(sqlite3 "$INSTALL_DB" "SELECT gen, COALESCE(executor_pid,0), COALESCE(executor_boot_id,'') FROM daemon_owner;" 2>/dev/null || true)
+    agmsg_daemon_read_state
+    # Only the exact record that was just judged unverifiable may be dropped:
+    # a daemon started since then has a different gen, and is left alone.
+    case "$seen_gen|$seen_pid|$seen_boot" in
+      *[!0-9\|]*|''|'||'*) ;;
+      *)
+        if [ "${AGMSGD_HEALTH:-}" = unverifiable ]; then
+          _with_op_lock "UPDATE daemon_owner SET state = 'none', socket = NULL, last_end_reason = 'record from an older version discarded by disable', last_end_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE gen = $seen_gen AND executor_pid = $seen_pid AND executor_boot_id = '$seen_boot' AND state = 'ready';"
+          state="$(sqlite3 "$INSTALL_DB" "SELECT state FROM daemon_owner;" 2>/dev/null || true)"
+        fi ;;
+    esac
+  fi
   if [ "$state" != "none" ]; then
     echo "agmsg daemon disable: service was unregistered but agmsgd has not confirmed stopping -- check 'agmsg daemon status'" >&2
     return 1

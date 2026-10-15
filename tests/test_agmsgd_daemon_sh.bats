@@ -309,6 +309,41 @@ EOF
   [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT state FROM daemon_owner;")" = "none" ]
   grep -q '^locked bootstrap$' "$events"
   grep -q '^locked bootout$' "$events"
+
+  # A record from an older version (boot id in kern.boottime seconds) whose
+  # pid still exists and that has no control socket cannot be checked; disable
+  # drops it rather than failing.
+  sqlite3 "$TEST_SKILL_DIR/run/install.db" "UPDATE daemon_owner SET state='ready', executor_pid=$$, executor_boot_id='1', socket=NULL, executor_started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now');"
+  AGMSGD_LAUNCHCTL="$fake_launchctl" AGMSGD_FAKE_LAUNCHD_MARKER="$marker" AGMSGD_FAKE_LAUNCHD_EVENTS="$events" AGMSGD_FAKE_OP_LOCK_DB="$TEST_SKILL_DIR/run/install-op.lock.db" \
+    run bash "$DAEMON" disable
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT state FROM daemon_owner;")" = "none" ]
+}
+
+@test "daemon.sh: an install.db with only the 2-column meta -- status only reads, enable and disable bring it up to date" {
+  [ "$(uname -s)" = "Darwin" ] || skip "this test's fake stands in for launchd specifically"
+  mkdir -p "$TEST_SKILL_DIR/run"
+  sqlite3 "$TEST_SKILL_DIR/run/install.db" "CREATE TABLE meta (schema_version INTEGER NOT NULL, install_id TEXT NOT NULL); INSERT INTO meta VALUES (1, 'daemon-sh-test');"
+  _write_completion_record
+  local fake_launchctl
+  fake_launchctl="$(_fake_launchctl)"
+
+  run bash "$DAEMON" status
+  [ "$status" -eq 0 ]
+  [ "${output#*not in use yet}" != "$output" ]
+  [ -z "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT name FROM sqlite_master WHERE name='daemon_owner';")" ]
+  AGMSGD_LAUNCHCTL="$fake_launchctl" AGMSGD_FAKE_LAUNCHD_MARKER="$TEST_SKILL_DIR/fake-launchd/registered" AGMSGD_FAKE_LAUNCHD_EVENTS="$TEST_SKILL_DIR/fake-launchd/events" AGMSGD_FAKE_OP_LOCK_DB="$TEST_SKILL_DIR/run/install-op.lock.db" AGMSGD_TEST_LAUNCHER="$SCRIPTS/daemon/agmsgd-launch.sh" \
+    run bash "$DAEMON" enable
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT install_id FROM meta;")" = "daemon-sh-test" ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT desired FROM daemon_intent;")" = "on" ]
+  AGMSGD_LAUNCHCTL="$fake_launchctl" AGMSGD_FAKE_LAUNCHD_MARKER="$TEST_SKILL_DIR/fake-launchd/registered" AGMSGD_FAKE_LAUNCHD_EVENTS="$TEST_SKILL_DIR/fake-launchd/events" AGMSGD_FAKE_OP_LOCK_DB="$TEST_SKILL_DIR/run/install-op.lock.db" \
+    run bash "$DAEMON" disable
+  [ "$status" -eq 0 ]
+  printf 'not a sqlite database' > "$TEST_SKILL_DIR/run/install.db"
+  run bash "$DAEMON" status
+  [ "$status" -ne 0 ]
+  [ "${output#*not in use yet}" = "$output" ]
 }
 
 @test "daemon.sh start: stale ready state asks the registered manager to start the service" {
@@ -361,6 +396,65 @@ EOF
   [ -f "$marker" ]
   [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT desired FROM daemon_intent;")" = "on" ]
   grep -q '^locked bootout$' "$events"
+}
+
+@test "daemon.sh disable: a running daemon is stopped before the service is unregistered, so its record returns to none" {
+  _seed_install_db
+  _write_completion_record
+  _run_with_deadline 15 bash "$DAEMON" start
+  [ "$status" -eq 0 ]
+  mkdir -p "$TEST_SKILL_DIR/fake-linux"
+  printf '#!/usr/bin/env bash\necho Linux\n' > "$TEST_SKILL_DIR/fake-linux/uname"
+  # Like systemd, "disable --now" terminates the daemon and waits for it to go.
+  # The pid is read now: install.db cannot be read while disable holds the lock.
+  local daemon_pid
+  daemon_pid="$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT executor_pid FROM daemon_owner;")"
+  [ -n "$daemon_pid" ]
+  cat > "$TEST_SKILL_DIR/fake-linux/systemctl" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  disable)
+    pid=$daemon_pid
+    if kill -0 "\$pid" 2>/dev/null; then
+      kill -TERM "\$pid"
+      for _ in \$(seq 1 150); do kill -0 "\$pid" 2>/dev/null || break; sleep 0.1; done
+    fi ;;
+esac
+exit 0
+EOF
+  chmod +x "$TEST_SKILL_DIR/fake-linux/uname" "$TEST_SKILL_DIR/fake-linux/systemctl"
+  local unit_id unit
+  unit_id="$(printf '%s:%s' "$TEST_SKILL_DIR" daemon-sh-test | shasum -a 256 | cut -c1-12)"
+  unit="$HOME/.config/systemd/user/agmsgd-$unit_id.service"
+  mkdir -p "$(dirname "$unit")"
+  : > "$unit"
+
+  PATH="$TEST_SKILL_DIR/fake-linux:$PATH" AGMSGD_SYSTEMCTL="$TEST_SKILL_DIR/fake-linux/systemctl" \
+    _run_with_deadline 40 bash "$DAEMON" disable
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/run/install.db" "SELECT state FROM daemon_owner;")" = "none" ]
+  [ ! -e "$unit" ]
+}
+
+@test "daemon.sh disable: only touches the intent and service its own step owns" {
+  _seed_install_db
+  _write_completion_record
+  local db="$TEST_SKILL_DIR/run/install.db" fns="$SCRIPTS/daemon-fns.sh"
+  # daemon.sh without its trailing dispatch, so the steps can be overridden.
+  awk '/^case "\$\{1:-\}" in/ {exit} {print}' "$DAEMON" > "$fns"
+  # (a) already off, and unregistering fails: the intent must stay off.
+  sqlite3 "$db" "UPDATE daemon_intent SET desired='off';"
+  run bash -c 'set -u; source "$1"; _unregister() { return 1; }; cmd_disable' _ "$fns"
+  [ "$status" -ne 0 ]
+  [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "off" ]
+  # (b) a newer enable lands while disable waits: its service is left alone.
+  sqlite3 "$db" "UPDATE daemon_intent SET desired='on';"
+  DB="$db" MARKER="$TEST_SKILL_DIR/unregistered" run bash -c 'set -u; source "$1"; _unregister() { echo unregistered >> "$MARKER"; }
+    _wait_owner_none() { sqlite3 "$DB" "UPDATE daemon_intent SET desired='"'"'on'"'"', op_gen = op_gen + 1;"; printf none; }
+    cmd_disable' _ "$fns"
+  [ "$status" -ne 0 ]
+  [ ! -e "$TEST_SKILL_DIR/unregistered" ]
+  [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "on" ]
 }
 
 @test "daemon.sh Windows registration writes the declared UTF-16 task XML" {
