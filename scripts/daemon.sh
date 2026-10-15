@@ -25,6 +25,8 @@ source "$SCRIPT_DIR/lib/daemon-seats.sh"
 source "$SCRIPT_DIR/lib/install-db.sh"
 # shellcheck source=lib/sqlpath.sh
 source "$SCRIPT_DIR/lib/sqlpath.sh"
+# shellcheck source=lib/hash.sh
+source "$SCRIPT_DIR/lib/hash.sh"
 
 _path_hint() {
   printf 'If agmsg is not found, use "%s/scripts/agmsg" daemon %s.\n' "$SKILL_DIR" "$1"
@@ -213,7 +215,8 @@ _unit_id() {
   if [ -z "$install_id" ]; then
     install_id="$(sqlite3 "$INSTALL_DB" "SELECT install_id FROM meta;" 2>/dev/null)"
   fi
-  printf '%s:%s' "$SKILL_DIR" "$install_id" | shasum -a 256 | cut -c1-12
+  # shasum is absent from Git Bash; agmsg_sha256 falls back to sha256sum.
+  printf '%s:%s' "$SKILL_DIR" "$install_id" | agmsg_sha256 | cut -c1-12
 }
 
 _os() {
@@ -345,7 +348,7 @@ _start_registered_service() {
   case "$(_os)" in
     darwin) "$AGMSGD_LAUNCHCTL" kickstart "gui/$(id -u)/$(_launchd_label)" ;;
     linux) "$AGMSGD_SYSTEMCTL" --user start "$(basename "$(_systemd_unit_path)")" ;;
-    windows) "$AGMSGD_SCHTASKS" /Run /TN "$(_schtasks_name)" ;;
+    windows) _schtasks /Run /TN "$(_schtasks_name)" ;;
     *) echo "agmsg daemon start: unsupported resident manager" >&2; return 1 ;;
   esac
 }
@@ -359,6 +362,12 @@ _start_unregistered_launcher() {
 # NOT YET RUN ON WINDOWS in this environment -- written to the Windows
 # Task Scheduler contract (LogonTrigger + RestartOnFailure via XML, since plain
 # `/Create` flags do not set restart-on-failure) and shellchecked only.
+# schtasks takes /Create-style switches; without this Git Bash rewrites a
+# leading-slash argument into a path ("C:/Program Files/Git/Create").
+_schtasks() {
+  MSYS2_ARG_CONV_EXCL='*' "$AGMSGD_SCHTASKS" "$@"
+}
+
 _register_windows() {
   local node_path="$1" name xml
   name="$(_schtasks_name)"
@@ -388,7 +397,9 @@ _register_windows() {
 EOF
   { printf '\xff\xfe'; iconv -f UTF-8 -t UTF-16LE "$xml_utf8"; } > "$xml"
   rm -f "$xml_utf8"
-  "$AGMSGD_SCHTASKS" /Create /TN "$name" /XML "$xml" /F
+  local native_xml
+  native_xml="$(cygpath -w "$xml" 2>/dev/null || printf '%s' "$xml")"
+  _schtasks /Create /TN "$name" /XML "$native_xml" /F
 }
 
 _unregister_windows() {
@@ -398,7 +409,7 @@ _unregister_windows() {
   if [ ! -f "$xml" ]; then
     return 0
   fi
-  if ! "$AGMSGD_SCHTASKS" /Delete /TN "$name" /F; then
+  if ! _schtasks /Delete /TN "$name" /F; then
     echo "agmsg daemon: could not delete scheduled task $name" >&2
     return 1
   fi
