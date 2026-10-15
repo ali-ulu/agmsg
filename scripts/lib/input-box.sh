@@ -247,12 +247,22 @@ _agmsg_input_box_raw_boxed() {
 # the padding before the percentage) is digits and nothing else -- never a
 # single trailing `[0-9]`, which only ever checked the final digit and let
 # "100%" 's leading "10" through unexamined.
+#
+# Also rtrims trailing whitespace (spaces AND tabs, both inside
+# `[[:space:]]`) before any of that (review, round 3): a real footer with
+# trailing padding -- common from a tmux `capture-pane` read -- otherwise
+# fails the suffix check, which is anchored to the literal END of the
+# string and has no tolerance of its own for anything coming after
+# "context left". Same idiom as the leading strip, mirrored: the longest
+# PREFIX ending in a non-space character (`${v##*[![:space:]]}`'s complement,
+# via `%`) is everything except the trailing run, which is what is kept.
 # Located on the STYLE-STRIPPED derived copy, same reason as the boxed
 # check above; without either form, refuse. Echoes the marker line's own
 # raw content (single line), styling intact.
 _agmsg_input_box_flat_typing_footer() {   # <one plain, style-stripped line>
-  local line="$1" stripped rest digits
-  stripped="${line#"${line%%[![:space:]]*}"}"
+  local line="$1" trimmed stripped rest digits
+  trimmed="${line%"${line##*[![:space:]]}"}"
+  stripped="${trimmed#"${trimmed%%[![:space:]]*}"}"
   case "$stripped" in
     'tab to queue message'*) ;;
     *) return 1 ;;

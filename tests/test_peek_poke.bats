@@ -1298,6 +1298,18 @@ _flat_screen() {
   [ "$status" -eq 14 ]
   [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
 
+  # Codex, the same real draft, but the typing footer carries TRAILING
+  # whitespace this time -- spaces and a tab (review, round 3): common
+  # from a tmux `capture-pane` read, and the suffix check is anchored to
+  # the literal end of the string, so without rtrimming first this still
+  # refused to even locate the box (15) despite the footer otherwise being
+  # the real one. Still a real draft once located, so still 14.
+  : > "$ARGV_LOG"
+  _install_fake_herdr_screen_sequence "$(printf '›a real draft\n\n  tab to queue message    100%% context left  \t\t\n')"
+  run bash "$SCRIPTS/poke.sh" testteam codex1 "hello"
+  [ "$status" -eq 14 ]
+  [ "$(grep -c '^herdr \[agent\] \[prompt\]' "$ARGV_LOG")" -eq 0 ]
+
   # Codex, the counterexample a review round found (#1394): a transcript
   # line merely MENTIONING both of the typing footer's two key phrases in
   # prose, never the real footer's own shape (not indented the way the
