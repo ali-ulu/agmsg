@@ -19,8 +19,8 @@ import { platform, uptime } from "node:os";
 // the same comparison purpose.
 //
 // linux: /proc/stat's `btime` line is the kernel's own authoritative boot
-// epoch. darwin: `sysctl -n kern.boottime` reports the same thing in a
-// different format. Neither drifts between calls.
+// epoch. darwin: `sysctl -n kern.bootsessionuuid`, a UUID fixed for the
+// boot. Neither drifts between calls.
 //
 // Anything else (win32 included): no simple authoritative file to read
 // without shelling out to something heavier (wmic/PowerShell) for every
@@ -44,17 +44,38 @@ export function bootId() {
     // to the approximate path rather than throw, since a boot id that is
     // merely approximate is still useful (see caller contract below).
   } else if (plat === "darwin") {
+    // kern.bootsessionuuid is fixed for the whole boot. kern.boottime is
+    // not: the kernel shifts it whenever the wall clock is stepped, so a
+    // value recorded days ago can differ by seconds from the same boot's
+    // current one.
     try {
-      const out = execFileSync("sysctl", ["-n", "kern.boottime"], {
+      const out = execFileSync("sysctl", ["-n", "kern.bootsessionuuid"], {
         encoding: "utf8",
-      });
-      const m = out.match(/sec\s*=\s*(\d+)/);
-      if (m) return m[1];
+      }).trim();
+      if (out) return out;
     } catch {
       // fall through to the approximate path
     }
   }
   return String(Math.round(Date.now() / 1000 - uptime()));
+}
+
+// Whether `recorded` names the boot this process is running in. A darwin
+// record written before bootId() moved to kern.bootsessionuuid holds
+// kern.boottime seconds; that cannot be compared for equality (see above),
+// so it is accepted when it is within a few minutes of the current
+// kern.boottime. Everything else is an exact match.
+export function sameBoot(recorded) {
+  const current = bootId();
+  if (current === recorded) return true;
+  if (platform() !== "darwin" || !/^\d+$/.test(String(recorded))) return false;
+  try {
+    const out = execFileSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" });
+    const m = out.match(/sec\s*=\s*(\d+)/);
+    return m !== null && Math.abs(Number(m[1]) - Number(recorded)) <= 600;
+  } catch {
+    return false;
+  }
 }
 
 // This process's own executor triple, as of the call. `role` and `pid` are
@@ -75,7 +96,7 @@ export function currentExecutor() {
 // where a stale boot id is itself the proof, not a reason to say "cannot
 // tell".
 export function isAlive({ pid, bootId: capturedBootId }) {
-  if (bootId() !== capturedBootId) return false;
+  if (!sameBoot(capturedBootId)) return false;
   try {
     process.kill(pid, 0);
     return true;

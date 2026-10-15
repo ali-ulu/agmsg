@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { bootId, currentExecutor, isAlive } from "../scripts/daemon/executor.mjs";
+import { bootId, currentExecutor, isAlive, sameBoot } from "../scripts/daemon/executor.mjs";
 
 test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apart", () => {
   assert.equal(bootId(), bootId(), "bootId must not change within the same boot");
@@ -27,4 +27,12 @@ test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apa
     false,
     "a mismatched boot id must read as confirmed dead regardless of the pid",
   );
+
+  if (process.platform === "darwin") {
+    // A record from when the boot id was kern.boottime seconds, shifted a
+    // few seconds since by a clock adjustment, is still this boot.
+    const boottime = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" }).stdout;
+    const sec = Number(boottime.match(/sec\s*=\s*(\d+)/)[1]);
+    assert.equal(sameBoot(String(sec - 3)), true);
+  }
 });
