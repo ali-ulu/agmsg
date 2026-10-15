@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { bootId, currentExecutor, isAlive } from "../scripts/daemon/executor.mjs";
@@ -40,5 +43,19 @@ test("bootId is stable across calls and isAlive tells living/dead/wrong-boot apa
     assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: "2000-01-01T00:00:00.000Z" }), false);
     // No usable claim time: cannot tell, which must never read as dead.
     assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: null }), null);
+    // kern.boottime unreadable: also cannot tell.
+    const shimDir = mkdtempSync(join(tmpdir(), "sysctl-shim-"));
+    writeFileSync(
+      join(shimDir, "sysctl"),
+      '#!/bin/sh\n[ "$2" = kern.boottime ] && exit 1\nexec /usr/sbin/sysctl "$@"\n',
+    );
+    chmodSync(join(shimDir, "sysctl"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${savedPath}`;
+    try {
+      assert.equal(isAlive({ pid: self.pid, bootId: legacy, startedAt: now }), null);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   }
 });

@@ -65,19 +65,21 @@ export function bootId() {
 // is stepped, so it is compared with a tolerance instead of for equality.
 // That is only a hint of the same boot, not proof: a restart within the
 // tolerance would match too.
+// true / false, or null when kern.boottime cannot be read (cannot tell).
 function legacyBootMatches(recorded) {
   if (platform() !== "darwin" || !/^\d+$/.test(String(recorded))) return false;
   try {
     const out = execFileSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" });
     const m = out.match(/sec\s*=\s*(\d+)/);
-    return m !== null && Math.abs(Number(m[1]) - Number(recorded)) <= 600;
+    return m === null ? null : Math.abs(Number(m[1]) - Number(recorded)) <= 600;
   } catch {
-    return false;
+    return null;
   }
 }
 
+// true / false / null (cannot tell) for "`recorded` is this boot's id".
 export function sameBoot(recorded) {
-  return bootId() === recorded || legacyBootMatches(recorded);
+  return bootId() === recorded ? true : legacyBootMatches(recorded);
 }
 
 // true when `pid` started no later than `claimedAt` (an ISO time), false when
@@ -118,7 +120,10 @@ export function currentExecutor() {
 export function isAlive({ pid, bootId: capturedBootId, startedAt }) {
   const legacy = bootId() !== capturedBootId;
   // Only an old-format darwin record gets past a differing boot id.
-  if (legacy && !legacyBootMatches(capturedBootId)) return false;
+  if (legacy) {
+    const match = legacyBootMatches(capturedBootId);
+    if (match !== true) return match;
+  }
   try {
     process.kill(pid, 0);
   } catch (error) {

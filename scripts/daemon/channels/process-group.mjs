@@ -74,7 +74,9 @@ export function observeProcessGroup(record) {
     return { state: "present" };
   }
   if (record.kind !== "posix-process-group") return { state: "unreadable", reason: "child_group_kind_mismatch" };
-  if (!sameBoot(record.boot_id)) return { state: "absent" };
+  const sameBootId = sameBoot(record.boot_id);
+  if (sameBootId === null) return { state: "unreadable", reason: "child_boot_id_unreadable" };
+  if (!sameBootId) return { state: "absent" };
   try {
     process.kill(-record.pgid, 0);
   } catch (error) {
