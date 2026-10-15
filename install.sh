@@ -146,10 +146,12 @@ agmsg_source_version() {
 # (bounded) and start the new version, so an enabled daemon comes back by
 # itself. A failure here never fails the update; it says how to start it.
 agmsg_install_restart_daemon() {   # <skill_dir>
-  local skill="$1" db="$1/run/install.db" desired state waited=0
+  local skill="$1" db="$1/run/install.db" intent op_gen state waited=0
   [ -f "$db" ] || return 0
-  desired="$(sqlite3 "$db" "SELECT desired FROM daemon_intent;" 2>/dev/null || true)"
-  [ "$desired" = on ] || return 0
+  # The intent as the update saw it; the start below only goes ahead if it is
+  # still this one, so a stop or disable during the wait is not undone.
+  intent="$(sqlite3 "$db" "SELECT desired || '|' || op_gen FROM daemon_intent;" 2>/dev/null || true)"
+  case "$intent" in on\|[0-9]*) op_gen="${intent#on|}" ;; *) return 0 ;; esac
   while [ "$waited" -lt 25 ]; do
     state="$(sqlite3 "$db" "SELECT state FROM daemon_owner;" 2>/dev/null || true)"
     [ "$state" = ready ] || break
@@ -157,7 +159,7 @@ agmsg_install_restart_daemon() {   # <skill_dir>
     sleep 1
   done
   echo "  ~ agmsgd is turned on; starting the updated version"
-  if ! bash "$skill/scripts/daemon.sh" start; then
+  if ! bash "$skill/scripts/daemon.sh" start --only-if-op-gen "$op_gen"; then
     echo "  ! agmsgd did not start after the update; run: bash $(printf '%q' "$skill/scripts/agmsg") daemon start" >&2
   fi
 }

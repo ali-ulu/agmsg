@@ -492,6 +492,21 @@ EOF
   [ "$(sqlite3 "$db" "SELECT codex_path FROM meta;")" = "/already/recorded/codex" ]
 }
 
+@test "daemon.sh start --only-if-op-gen: a stop or disable after that op_gen is not undone" {
+  _seed_install_db
+  _write_completion_record
+  local db="$TEST_SKILL_DIR/run/install.db" seen
+  sqlite3 "$db" "UPDATE daemon_intent SET desired = 'on', op_gen = op_gen + 1;"
+  seen="$(sqlite3 "$db" "SELECT op_gen FROM daemon_intent;")"
+  # a person turns it off after the update looked
+  sqlite3 "$db" "UPDATE daemon_intent SET desired = 'off', op_gen = op_gen + 1, set_by = 'disable';"
+  _run_with_deadline 15 bash "$DAEMON" start --only-if-op-gen "$seen"
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$db" "SELECT desired FROM daemon_intent;")" = "off" ]
+  [ "$(sqlite3 "$db" "SELECT state FROM daemon_owner;")" = "none" ]
+  [ "${output#*left as it is now}" != "$output" ]
+}
+
 @test "daemon.sh Windows registration writes the declared UTF-16 task XML" {
   _seed_install_db
   _write_completion_record
