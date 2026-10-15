@@ -46,7 +46,9 @@ export function processStartWitness(pid) {
 
 export function captureProcessGroup(pgid) {
   const witness = processStartWitness(pgid);
-  if (!witness) return { state: "unreadable", reason: "child_start_witness_unavailable" };
+  // The group id is kept even without a witness: a later observation can still
+  // prove the group is gone (no such group), though never that it is present.
+  if (!witness) return { state: "unreadable", reason: "child_start_witness_unavailable", pgid };
   return {
     state: "complete",
     kind: platform() === "win32" ? "windows-native-process" : "posix-process-group",
@@ -57,6 +59,15 @@ export function captureProcessGroup(pgid) {
 }
 
 export function observeProcessGroup(record) {
+  if (record?.state === "unreadable" && record.reason === "child_start_witness_unavailable"
+      && platform() !== "win32" && Number.isSafeInteger(record.pgid) && record.pgid >= 2) {
+    try {
+      process.kill(-record.pgid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return { state: "absent" };
+    }
+    return { state: "unreadable", reason: "child_start_witness_unavailable" };
+  }
   if (!record || record.state !== "complete" || !Number.isSafeInteger(record.pgid) || record.pgid < 2 || !record.boot_id || !record.witness) {
     return { state: "unreadable", reason: "child_group_record_unreadable" };
   }

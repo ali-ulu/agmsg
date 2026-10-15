@@ -246,14 +246,10 @@ async function pendingObservation(pending, now, observeGroup) {
   let children;
   try { children = JSON.parse(pending.children); } catch { return { state: "pending", reason: "child_group_record_unreadable" }; }
   if (children.state === "incomplete") return { state: "pending", reason: "queue_child_state_incomplete", childrenUnresolved: true };
-  if (children.state === "complete") {
+  if (children.state === "complete" || (children.state === "unreadable" && children.pgid !== undefined)) {
     let group;
     try { group = observeGroup(children); } catch { group = { state: "unreadable", reason: "child_group_observation_failed" }; }
     if (group?.state !== "absent") return { state: "pending", reason: group?.reason ?? "queue_child_still_running", childrenUnresolved: true };
-  } else if (children.state === "unreadable" && typeof children.result === "string") {
-    // The child's start could not be witnessed, but its result is recorded, so
-    // it has already finished: nothing is left to wait for. Go on to the
-    // queue and rollout evidence and the confirmation window.
   } else if (children.state !== "absent") {
     return { state: "pending", reason: children.reason ?? "child_group_record_unreadable", childrenUnresolved: true };
   }
@@ -298,12 +294,17 @@ export function createCodexQueueChannel({
     let pending = readPending(db, seat);
     if (pending && registered) {
       // A reservation made for another thread than the one this seat's record
-      // names now is about a conversation that is gone: drop it, whatever the
-      // child state says, and deliver to the current thread.
+      // names now is about a conversation that is gone. It is dropped and the
+      // current thread gets the nudge, but only once its child is shown to be
+      // finished: an old writer that may still be running keeps the Codex home
+      // blocked exactly as before.
       const current = readSession(join(installRoot, "run"), team, agent);
       if (current.state === "present" && current.record.thread && current.record.thread !== pending.thread) {
-        setQueueState(db, pending.id, "expired");
-        pending = null;
+        const old = await pendingObservation(pending, now, observeGroup);
+        if (!old.childrenUnresolved) {
+          setQueueState(db, pending.id, "expired");
+          pending = null;
+        }
       }
     }
     if (pending) {

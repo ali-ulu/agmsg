@@ -554,24 +554,32 @@ test('Codex channel queues one unread snapshot and confirms it before advancing 
   writeFileSync(path.join(teamsDir, 'alpha', 'config.json'), JSON.stringify({
     agents: { alice: { registrations: [{ type: 'codex', project: root }] } },
   }));
-  // A reservation whose child finished without a witnessed start (the result is
-  // recorded) must not hold the seat, and one made for a thread the seat no
-  // longer names is dropped and delivered to the current thread.
-  const unwitnessed = JSON.stringify({ state: 'unreadable', reason: 'child_start_witness_unavailable', result: 'failed' });
+  // A child whose start could not be witnessed is still observed by its group
+  // id: a group that is gone no longer holds the seat, and a reservation for a
+  // thread the seat no longer names is dropped and delivered to the current
+  // thread only once that group is gone.
+  const unwitnessed = JSON.stringify({ state: 'unreadable', reason: 'child_start_witness_unavailable', pgid: 4242, result: 'failed' });
   const insertPending = (forThread, nonce, queueItem) => installDb.prepare(`
     INSERT INTO beta_codex_queue (seat, codex_home, thread, up_to, nonce, queue_item_id, state, children, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
   `).run(JSON.stringify(['alpha', 'alice']), codexHome, forThread, JSON.stringify({ eventSeq: 1, legacyId: 0 }), nonce, queueItem, unwitnessed, new Date().toISOString());
   const latestState = () => installDb.prepare("SELECT state FROM beta_codex_queue WHERE seat = ? ORDER BY id DESC LIMIT 1").get(JSON.stringify(['alpha', 'alice'])).state;
   const sentThreads = [];
+  let groupState = 'absent';
   const staleChannel = createCodexQueueChannel({
     db: installDb, installRoot: root, expectedOpGen: 4, env: { AGMSG_STORAGE_PATH: storageDir },
+    observeGroup: () => ({ state: groupState }),
     queue: async (request) => { sentThreads.push(request.thread); return { kind: 'failed', started: false, reason: 'spawn_failed:test' }; },
   });
   insertPending(thread, 'unwitnessed-nonce', itemId);
   await staleChannel.pollOnce();
-  assert.equal(latestState(), 'confirmed', 'a finished child with no start witness still resolves from the queue evidence');
+  assert.equal(latestState(), 'confirmed', 'a gone group with no start witness still resolves from the queue evidence');
   insertPending('01a0ea97-c011-73f3-8470-fd59db15adbb', 'old-thread-nonce', null);
+  groupState = 'present';
+  await staleChannel.pollOnce();
+  assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'pending', 'a group that may still write keeps the old reservation');
+  assert.deepEqual(sentThreads, []);
+  groupState = 'absent';
   await staleChannel.pollOnce();
   assert.equal(installDb.prepare("SELECT state FROM beta_codex_queue WHERE nonce = 'old-thread-nonce'").get().state, 'expired');
   assert.deepEqual(sentThreads, [thread], 'the nudge goes to the thread the seat names now');
