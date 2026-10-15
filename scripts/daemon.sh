@@ -636,7 +636,7 @@ cmd_disable() {
     # block every later start.
     local AGMSGD_DESIRED AGMSGD_HEALTH AGMSGD_REASON
     agmsg_daemon_read_state
-    if [ "$AGMSGD_HEALTH" = unverifiable ]; then
+    if [ "${AGMSGD_HEALTH:-}" = unverifiable ]; then
       _with_op_lock "UPDATE daemon_owner SET state = 'none', socket = NULL, last_end_reason = 'record from an older version discarded by disable', last_end_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE state <> 'none';"
       state=none
     fi
