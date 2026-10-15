@@ -195,6 +195,34 @@ config_field() {
   [ ! -e "$alice_spawn" ]
   [ -f "$carol_spawn" ]
   grep -qF 'herdr:sock:pA' "$carol_spawn"
+
+  # The other half of the same fix (review round, #1625): a JOURNALED team's
+  # placement path is already keyed by member_id, not name, so renaming must
+  # not touch it at all -- the record stays exactly where it was, under the
+  # SAME path, with its original content intact. Proving this needs a live
+  # record already sitting there BEFORE the rename, not just "a file exists
+  # afterward": a version of this fix that blindly carried out the same
+  # move/replace for a journaled team too was confirmed (by hand, before
+  # this was gated off) to compute the identical id-keyed path for both
+  # names and reduce to a same-path no-op -- this only tells the two apart
+  # by also checking the content survived untouched.
+  bash "$SCRIPTS/join.sh" idteam dave claude-code /tmp/d
+  local dave_spawn
+  (
+    export SKILL_DIR="$TEST_SKILL_DIR"
+    # shellcheck disable=SC1090
+    source "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    agmsg_spawn_path idteam dave > "$TEST_SKILL_DIR/dave_spawn_path"
+  )
+  dave_spawn="$(cat "$TEST_SKILL_DIR/dave_spawn_path")"
+  mkdir -p "$(dirname "$dave_spawn")"
+  printf 'herdr:sock:pD\t/tmp/d\tclaude-code\n' > "$dave_spawn"
+
+  bash "$SCRIPTS/rename.sh" idteam dave erin
+
+  [ "$(config_field "$TEST_SKILL_DIR/teams/idteam/config.json" '$.agents.erin.registrations[0].type')" = claude-code ]
+  [ -f "$dave_spawn" ]
+  grep -qF 'herdr:sock:pD' "$dave_spawn"
 }
 
 @test "concurrent renames accept only the first event whose from name is current" {

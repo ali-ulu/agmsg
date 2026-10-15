@@ -35,6 +35,15 @@ set -euo pipefail
 # any record found at the new name belongs to no one in the roster (spawn.sh
 # only ever writes one after pre-joining), so it is replaced unconditionally,
 # with no liveness check of its own.
+#
+# A JOURNALED team's placement path is already keyed by member_id (#1023),
+# which agmsg_roster_name_owner resolves from a name's FIRST-ever binding —
+# OLD_NAME keeps resolving to it forever, even after this very rename, and
+# NEW_NAME either has no prior owner or (the only other way past the
+# NAME_OWNER check above) already resolves to the SAME member_id — so both
+# names already compute the identical id-keyed path with no action needed.
+# This migration therefore only runs for a name-only legacy team (no
+# roster.jsonl): see HAD_JOURNAL below.
 
 TEAM="${1:?Usage: rename.sh <team> <old_name> <new_name>}"
 OLD_NAME="${2:?Missing old agent name}"
@@ -93,6 +102,7 @@ if [ -n "$NEW_VAL" ] && [ "$NEW_VAL" != "null" ]; then
 fi
 
 if agmsg_roster_has_journal "$TEAMS_DIR/$TEAM"; then
+  HAD_JOURNAL=1
   MEMBER_ID=$(agmsg_sqlite_mem \
     "SELECT COALESCE(json_extract('$CONFIG_ESCAPED', '\$.agents.' || '$OLD_NAME_SQL' || '.member_id'),'');")
   [ -n "$MEMBER_ID" ] || {
@@ -110,6 +120,7 @@ if agmsg_roster_has_journal "$TEAMS_DIR/$TEAM"; then
   agmsg_roster_project_config "$TEAMS_DIR/$TEAM" "$TEAM_CONFIG"
   UPDATED=$(cat "$TEAM_CONFIG")
 else
+  HAD_JOURNAL=0
   # Name-only legacy teams keep the pre-journal cache mutation.
   UPDATED=$(agmsg_sqlite_mem \
     "SELECT json_remove(json_set('$CONFIG_ESCAPED', '\$.agents.' || '$NEW_NAME_SQL', json_extract('$CONFIG_ESCAPED', '\$.agents.' || '$OLD_NAME_SQL')), '\$.agents.' || '$OLD_NAME_SQL');")
@@ -179,24 +190,32 @@ if [ "$(agmsg_storage_driver)" = jsonl ]; then
 fi
 
 # --- Carry the placement record over (#1403) --------------------------------
-# See the header comment for why this one file is the exception. NEW_NAME was
-# already confirmed not to be in the roster above, so whatever sits at its
-# placement path (if anything) is a leftover from an unrelated former member,
-# never a live claim -- no liveness check needed, just an unconditional
-# replace. agmsg_spawn_path's own rc 1 (SKILL_DIR unresolved, or both an
-# id-keyed and legacy file already colliding) is left alone rather than
-# treated as "no path": acting on a guessed path here would risk exactly the
-# double-record state the comment in actas-lock.sh refuses to resolve.
-OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
-NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
-if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
-  if [ -n "$NEW_SPAWN_PATH" ]; then
-    mv -f "$OLD_SPAWN_PATH" "$NEW_SPAWN_PATH"
+# See the header comment for why this one file is the exception, and why it
+# only runs for a name-only legacy team: a journaled team's placement path
+# is already keyed by member_id and needs no migration (confirmed by
+# reproducing it directly -- OLD_NAME and NEW_NAME compute the identical
+# id-keyed path there, making this whole block a same-path no-op at best;
+# skipped outright rather than relying on that happening to be harmless).
+if [ "$HAD_JOURNAL" = 0 ]; then
+  # NEW_NAME was already confirmed not to be in the roster above, so
+  # whatever sits at its placement path (if anything) is a leftover from an
+  # unrelated former member, never a live claim -- no liveness check
+  # needed, just an unconditional replace. agmsg_spawn_path's own rc 1
+  # (SKILL_DIR unresolved, or both an id-keyed and legacy file already
+  # colliding) is left alone rather than treated as "no path": acting on a
+  # guessed path here would risk exactly the double-record state the
+  # comment in actas-lock.sh refuses to resolve.
+  OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
+  NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
+  if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
+    if [ -n "$NEW_SPAWN_PATH" ]; then
+      mv -f "$OLD_SPAWN_PATH" "$NEW_SPAWN_PATH"
+    fi
+  elif [ -n "$NEW_SPAWN_PATH" ] && [ -f "$NEW_SPAWN_PATH" ]; then
+    # OLD had no placement record of its own -- the one under NEW_NAME is
+    # still someone else's leftover, not something to inherit as-is.
+    rm -f "$NEW_SPAWN_PATH"
   fi
-elif [ -n "$NEW_SPAWN_PATH" ] && [ -f "$NEW_SPAWN_PATH" ]; then
-  # OLD had no placement record of its own -- the one under NEW_NAME is
-  # still someone else's leftover, not something to inherit as-is.
-  rm -f "$NEW_SPAWN_PATH"
 fi
 
 agmsg_lock_release
