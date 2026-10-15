@@ -291,6 +291,26 @@ config_field() {
   bash "$SCRIPTS/rename.sh" a old 'b__c'
 
   grep -qF 'herdr:sock:LIVE' "$shared_spawn"
+
+  # A fifth case (review finding, #1625 round 2): the "__"-contains check
+  # above alone misses a collision caused by an underscore sitting right at
+  # the join boundary, not inside either half. Team "a" agent "_b" and team
+  # "a_" agent "b" both encode to "a___b" even though NEITHER half contains
+  # "__" on its own -- the ambiguity comes from the inserted "__" separator
+  # picking up an extra adjacent "_" from one side.
+  mkdir -p "$TEST_SKILL_DIR/teams/a2"
+  printf '%s\n' '{"name":"a2","agents":{"old2":{"type":"claude-code","project":"/tmp/x"}}}' \
+    > "$TEST_SKILL_DIR/teams/a2/config.json"
+  mkdir -p "$TEST_SKILL_DIR/teams/a2_"
+  printf '%s\n' '{"name":"a2_","agents":{"y":{"type":"claude-code","project":"/tmp/y"}}}' \
+    > "$TEST_SKILL_DIR/teams/a2_/config.json"
+  local shared_spawn2
+  shared_spawn2="$(cat "$TEST_SKILL_DIR/rundir2")/spawn.a2___y"
+  printf 'herdr:sock:LIVE2\t/tmp/y\tclaude-code\n' > "$shared_spawn2"
+
+  bash "$SCRIPTS/rename.sh" a2 old2 '_y'
+
+  grep -qF 'herdr:sock:LIVE2' "$shared_spawn2"
 }
 
 @test "concurrent renames accept only the first event whose from name is current" {
