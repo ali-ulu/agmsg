@@ -264,6 +264,33 @@ config_field() {
   grace_resolved="$(cat "$TEST_SKILL_DIR/grace_resolved_path")"
   [ -f "$grace_resolved" ]
   grep -qF 'herdr:sock:pF' "$grace_resolved"
+
+  # A fourth case, in the LEGACY-team branch (review finding, #1625): the
+  # encoded legacy filename "<enc_team>__<enc_name>" has no separator
+  # escaping, so renaming within team "legacy" to a name containing "__"
+  # can encode to the exact same path as an unrelated pair in a DIFFERENT
+  # team -- team "a__b" agent "c" also encodes to "spawn.a__b__c". Without
+  # the same unambiguity guard the id-team branch already uses, this
+  # would mv/rm that other team's live placement record.
+  mkdir -p "$TEST_SKILL_DIR/teams/a"
+  printf '%s\n' '{"name":"a","agents":{"old":{"type":"claude-code","project":"/tmp/a"}}}' \
+    > "$TEST_SKILL_DIR/teams/a/config.json"
+  mkdir -p "$TEST_SKILL_DIR/teams/a__b"
+  printf '%s\n' '{"name":"a__b","agents":{"c":{"type":"claude-code","project":"/tmp/c"}}}' \
+    > "$TEST_SKILL_DIR/teams/a__b/config.json"
+  local shared_spawn
+  (
+    export SKILL_DIR="$TEST_SKILL_DIR"
+    # shellcheck disable=SC1090
+    source "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    _actas_lock_dir > "$TEST_SKILL_DIR/rundir2"
+  )
+  shared_spawn="$(cat "$TEST_SKILL_DIR/rundir2")/spawn.a__b__c"
+  printf 'herdr:sock:LIVE\t/tmp/c\tclaude-code\n' > "$shared_spawn"
+
+  bash "$SCRIPTS/rename.sh" a old 'b__c'
+
+  grep -qF 'herdr:sock:LIVE' "$shared_spawn"
 }
 
 @test "concurrent renames accept only the first event whose from name is current" {

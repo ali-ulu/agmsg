@@ -202,6 +202,11 @@ fi
 
 # --- Carry the placement record over (#1403) --------------------------------
 # See the header comment for the two cases this covers.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/team-delete.sh"
+TEAM_ENC="$(_actas_lock_encode "$TEAM")"
+OLD_ENC="$(_actas_lock_encode "$OLD_NAME")"
+NEW_ENC="$(_actas_lock_encode "$NEW_NAME")"
 if [ "$HAD_JOURNAL" = 0 ]; then
   # Name-only legacy team: agmsg_spawn_path is purely name-keyed, so the
   # record sits wherever its name says. NEW_NAME was already confirmed not
@@ -212,16 +217,29 @@ if [ "$HAD_JOURNAL" = 0 ]; then
   # and legacy file already colliding) is left alone rather than treated as
   # "no path": acting on a guessed path here would risk exactly the
   # double-record state the comment in actas-lock.sh refuses to resolve.
-  OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
-  NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
-  if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
-    if [ -n "$NEW_SPAWN_PATH" ]; then
-      mv -f "$OLD_SPAWN_PATH" "$NEW_SPAWN_PATH"
+  #
+  # The encoded legacy filename "<enc_team>__<enc_name>" has no separator
+  # escaping (actas-lock.sh's own #1023 comment), so "__" inside either
+  # name makes the split not provably this (team, name) pair's alone --
+  # team "a" agent "b__c" and team "a__b" agent "c" both encode to
+  # "a__b__c" (review finding, #1625: renaming within team "a" to a name
+  # containing "__" could otherwise mv/rm a different team's live
+  # placement record sharing that same encoded path). Guarded the same
+  # way team-delete.sh's own sweep already is, via
+  # _agmsg_team_delete_legacy_unambiguous.
+  if _agmsg_team_delete_legacy_unambiguous "$TEAM_ENC" "$OLD_ENC" \
+    && _agmsg_team_delete_legacy_unambiguous "$TEAM_ENC" "$NEW_ENC"; then
+    OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
+    NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
+    if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
+      if [ -n "$NEW_SPAWN_PATH" ]; then
+        mv -f "$OLD_SPAWN_PATH" "$NEW_SPAWN_PATH"
+      fi
+    elif [ -n "$NEW_SPAWN_PATH" ] && [ -f "$NEW_SPAWN_PATH" ]; then
+      # OLD had no placement record of its own -- the one under NEW_NAME is
+      # still someone else's leftover, not something to inherit as-is.
+      rm -f "$NEW_SPAWN_PATH"
     fi
-  elif [ -n "$NEW_SPAWN_PATH" ] && [ -f "$NEW_SPAWN_PATH" ]; then
-    # OLD had no placement record of its own -- the one under NEW_NAME is
-    # still someone else's leftover, not something to inherit as-is.
-    rm -f "$NEW_SPAWN_PATH"
   fi
 else
   # Journaled team. Resolve the id-keyed path directly -- via
@@ -240,14 +258,8 @@ else
     if [ ! -f "$ID_SPAWN_PATH" ]; then
       # The id-keyed file is not the real one in use yet -- #1403's own
       # case: both sides may still be ordinary legacy name-keyed files,
-      # untouched since before #1023. _agmsg_team_delete_legacy_unambiguous
-      # (team-delete.sh) is reused here rather than assuming either half
-      # is "__"-free: a name containing "__" makes the encoded legacy path
-      # not provably this (team, name) pair's alone, so it is left alone.
-      source "$SCRIPT_DIR/lib/team-delete.sh"
-      TEAM_ENC="$(_actas_lock_encode "$TEAM")"
-      OLD_ENC="$(_actas_lock_encode "$OLD_NAME")"
-      NEW_ENC="$(_actas_lock_encode "$NEW_NAME")"
+      # untouched since before #1023. Same "__"-collision guard as the
+      # legacy-team branch above, same reason.
       if _agmsg_team_delete_legacy_unambiguous "$TEAM_ENC" "$NEW_ENC"; then
         NEW_LEGACY_SPAWN_PATH="$(_actas_lock_dir)/spawn.${TEAM_ENC}__${NEW_ENC}"
         # A leftover from an unrelated former member, same reasoning as
