@@ -30,20 +30,31 @@ set -euo pipefail
 # under the old name, it goes invisible the moment the rename lands, and a
 # stale record that happens to already sit at the new name (a past, unrelated
 # member that used to have it, now gone from the roster) wins instead (#1403).
-# So this one record is moved to the new name below, after the roster update
-# the checks above already confirmed as the only way NEW_NAME could be legal:
-# any record found at the new name belongs to no one in the roster (spawn.sh
-# only ever writes one after pre-joining), so it is replaced unconditionally,
-# with no liveness check of its own.
 #
-# A JOURNALED team's placement path is already keyed by member_id (#1023),
-# which agmsg_roster_name_owner resolves from a name's FIRST-ever binding —
-# OLD_NAME keeps resolving to it forever, even after this very rename, and
-# NEW_NAME either has no prior owner or (the only other way past the
-# NAME_OWNER check above) already resolves to the SAME member_id — so both
-# names already compute the identical id-keyed path with no action needed.
-# This migration therefore only runs for a name-only legacy team (no
-# roster.jsonl): see HAD_JOURNAL below.
+# A JOURNALED team's placement path is keyed by member_id once one has been
+# minted there (#1023), and member_id survives a rename on its own: OLD_NAME
+# keeps resolving to it forever (agmsg_roster_name_owner is keyed on a name's
+# FIRST-ever binding, never its current one), and NEW_NAME either has no
+# prior owner or (the only other way past the earlier NAME_OWNER check)
+# already resolves to that same id -- no migration needed when the id-keyed
+# file is already the one in use. BUT #1023 only migrates a pair's file to
+# the id key the next time something WRITES it -- an existing legacy
+# name-keyed file is left exactly where it is and keeps being served
+# (actas-lock.sh's own "MAIN defense" comment) until that happens. #1403's
+# own reproduction was exactly this: an id-having team where NEITHER side had
+# ever been written since #1023 landed, so OLD and NEW both still had
+# ordinary legacy name-keyed files, and renaming did nothing to move either
+# one -- the dead NEW-side leftover kept winning. So a journaled team is NOT
+# simply skipped: if the id-keyed file is already the real one in use,
+# nothing happens (see above); otherwise, a legacy leftover under NEW_NAME is
+# removed and a legacy record under OLD_NAME is promoted to the id-keyed
+# path, the same place a write would eventually land it anyway.
+#
+# Either way, whatever ends up at the new name/id's path either came from
+# OLD_NAME or was already correct, so it is replaced unconditionally, with
+# no liveness check of its own -- the earlier "new doesn't exist in the
+# roster" check already established that nothing currently live still needs
+# whatever used to be at the destination.
 
 TEAM="${1:?Usage: rename.sh <team> <old_name> <new_name>}"
 OLD_NAME="${2:?Missing old agent name}"
@@ -190,21 +201,17 @@ if [ "$(agmsg_storage_driver)" = jsonl ]; then
 fi
 
 # --- Carry the placement record over (#1403) --------------------------------
-# See the header comment for why this one file is the exception, and why it
-# only runs for a name-only legacy team: a journaled team's placement path
-# is already keyed by member_id and needs no migration (confirmed by
-# reproducing it directly -- OLD_NAME and NEW_NAME compute the identical
-# id-keyed path there, making this whole block a same-path no-op at best;
-# skipped outright rather than relying on that happening to be harmless).
+# See the header comment for the two cases this covers.
 if [ "$HAD_JOURNAL" = 0 ]; then
-  # NEW_NAME was already confirmed not to be in the roster above, so
-  # whatever sits at its placement path (if anything) is a leftover from an
-  # unrelated former member, never a live claim -- no liveness check
-  # needed, just an unconditional replace. agmsg_spawn_path's own rc 1
-  # (SKILL_DIR unresolved, or both an id-keyed and legacy file already
-  # colliding) is left alone rather than treated as "no path": acting on a
-  # guessed path here would risk exactly the double-record state the
-  # comment in actas-lock.sh refuses to resolve.
+  # Name-only legacy team: agmsg_spawn_path is purely name-keyed, so the
+  # record sits wherever its name says. NEW_NAME was already confirmed not
+  # to be in the roster above, so whatever sits at its placement path (if
+  # anything) is a leftover from an unrelated former member, never a live
+  # claim -- no liveness check needed, just an unconditional replace.
+  # agmsg_spawn_path's own rc 1 (SKILL_DIR unresolved, or both an id-keyed
+  # and legacy file already colliding) is left alone rather than treated as
+  # "no path": acting on a guessed path here would risk exactly the
+  # double-record state the comment in actas-lock.sh refuses to resolve.
   OLD_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$OLD_NAME" 2>/dev/null)" && [ -n "$OLD_SPAWN_PATH" ] || OLD_SPAWN_PATH=""
   NEW_SPAWN_PATH="$(agmsg_spawn_path "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$NEW_SPAWN_PATH" ] || NEW_SPAWN_PATH=""
   if [ -n "$OLD_SPAWN_PATH" ] && [ -f "$OLD_SPAWN_PATH" ]; then
@@ -215,6 +222,43 @@ if [ "$HAD_JOURNAL" = 0 ]; then
     # OLD had no placement record of its own -- the one under NEW_NAME is
     # still someone else's leftover, not something to inherit as-is.
     rm -f "$NEW_SPAWN_PATH"
+  fi
+else
+  # Journaled team. Resolve the id-keyed path directly -- via
+  # _agmsg_id_key_or_legacy, never through agmsg_spawn_path's own
+  # existence-based fallback, which would just hand back a legacy file
+  # if one is already there instead of answering "what does the id key
+  # itself resolve to". Its rc 1 (no team_id -- an id-less journal,
+  # #1023's own scope cut) and rc 2 (undetermined) both mean "cannot
+  # safely tell", so nothing is touched rather than guessed at -- same
+  # "&&/||, never $?" shape as OLD/NEW_SPAWN_PATH above, required under
+  # this script's own `set -e` (a bare `cmd; rc=$?` dies at the
+  # assignment before the next line can read $?).
+  ID_KEY="$(_agmsg_id_key_or_legacy "$TEAM" "$NEW_NAME" 2>/dev/null)" && [ -n "$ID_KEY" ] || ID_KEY=""
+  if [ -n "$ID_KEY" ]; then
+    ID_SPAWN_PATH="$(_actas_lock_dir)/spawn.$ID_KEY"
+    if [ ! -f "$ID_SPAWN_PATH" ]; then
+      # The id-keyed file is not the real one in use yet -- #1403's own
+      # case: both sides may still be ordinary legacy name-keyed files,
+      # untouched since before #1023. _agmsg_team_delete_legacy_unambiguous
+      # (team-delete.sh) is reused here rather than assuming either half
+      # is "__"-free: a name containing "__" makes the encoded legacy path
+      # not provably this (team, name) pair's alone, so it is left alone.
+      source "$SCRIPT_DIR/lib/team-delete.sh"
+      TEAM_ENC="$(_actas_lock_encode "$TEAM")"
+      OLD_ENC="$(_actas_lock_encode "$OLD_NAME")"
+      NEW_ENC="$(_actas_lock_encode "$NEW_NAME")"
+      if _agmsg_team_delete_legacy_unambiguous "$TEAM_ENC" "$NEW_ENC"; then
+        NEW_LEGACY_SPAWN_PATH="$(_actas_lock_dir)/spawn.${TEAM_ENC}__${NEW_ENC}"
+        # A leftover from an unrelated former member, same reasoning as
+        # the legacy-team branch above.
+        rm -f "$NEW_LEGACY_SPAWN_PATH"
+      fi
+      if _agmsg_team_delete_legacy_unambiguous "$TEAM_ENC" "$OLD_ENC"; then
+        OLD_LEGACY_SPAWN_PATH="$(_actas_lock_dir)/spawn.${TEAM_ENC}__${OLD_ENC}"
+        [ -f "$OLD_LEGACY_SPAWN_PATH" ] && mv -f "$OLD_LEGACY_SPAWN_PATH" "$ID_SPAWN_PATH"
+      fi
+    fi
   fi
 fi
 

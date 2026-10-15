@@ -223,6 +223,47 @@ config_field() {
   [ "$(config_field "$TEST_SKILL_DIR/teams/idteam/config.json" '$.agents.erin.registrations[0].type')" = claude-code ]
   [ -f "$dave_spawn" ]
   grep -qF 'herdr:sock:pD' "$dave_spawn"
+
+  # A third case in the same journaled team (review round, #1625): #1023
+  # only migrates a pair's file to its id key the next time something
+  # WRITES it, so an id-having team can still have ordinary legacy
+  # name-keyed files for BOTH names if neither was ever written since #1023
+  # landed -- #1403's own reproduction. frank's real record is still a
+  # legacy file (never promoted), and a dead tmux leftover already sits
+  # under the destination name -- also still legacy, from some unrelated
+  # former member.
+  bash "$SCRIPTS/join.sh" idteam frank claude-code /tmp/f
+  local rundir frank_legacy grace_legacy
+  (
+    export SKILL_DIR="$TEST_SKILL_DIR"
+    # shellcheck disable=SC1090
+    source "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    _actas_lock_dir > "$TEST_SKILL_DIR/rundir"
+  )
+  rundir="$(cat "$TEST_SKILL_DIR/rundir")"
+  frank_legacy="$rundir/spawn.idteam__frank"
+  grace_legacy="$rundir/spawn.idteam__grace"
+  printf 'herdr:sock:pF\t/tmp/f\tclaude-code\n' > "$frank_legacy"
+  printf 'tmux:%%9\t/tmp/long-gone\tclaude-code\n' > "$grace_legacy"
+
+  bash "$SCRIPTS/rename.sh" idteam frank grace
+
+  # Both legacy files are gone -- frank's never-promoted record did not stay
+  # behind under the old name, and grace's dead leftover did not survive
+  # either -- and whoever resolves grace's placement now (team.sh, the
+  # #1114 guard) reaches frank's real record, promoted to the id key.
+  [ ! -e "$frank_legacy" ]
+  [ ! -e "$grace_legacy" ]
+  (
+    export SKILL_DIR="$TEST_SKILL_DIR"
+    # shellcheck disable=SC1090
+    source "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    agmsg_spawn_path idteam grace > "$TEST_SKILL_DIR/grace_resolved_path"
+  )
+  local grace_resolved
+  grace_resolved="$(cat "$TEST_SKILL_DIR/grace_resolved_path")"
+  [ -f "$grace_resolved" ]
+  grep -qF 'herdr:sock:pF' "$grace_resolved"
 }
 
 @test "concurrent renames accept only the first event whose from name is current" {
