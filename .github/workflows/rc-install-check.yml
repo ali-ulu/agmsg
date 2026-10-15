@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Install sqlite3 (Windows runner has none)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -34,6 +34,7 @@ jobs:
         env:
           SCENARIO: ${{ matrix.scenario }}
         run: |
+          set +e
           S="$HOME/.agents/skills/agmsg/scripts"
           REPO="$PWD"
           WORK="$RUNNER_TEMP/work"; mkdir -p "$WORK/other"
