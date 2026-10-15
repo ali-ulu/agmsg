@@ -108,7 +108,7 @@ _with_op_lock_run() {
   local AGMSGD_LOCK_INSTALL_ID
   shift
   expected_generation="$(_install_generation)" || {
-    echo "agmsg daemon: could not read this install's record (run/install-manifest.json does not match run/install.db, or one of them cannot be read). Run agmsg install --update, then try again." >&2
+    echo "agmsg daemon: could not read this install's record (run/install-manifest.json does not match run/install.db, or one of them cannot be read). Run agmsg install again to repair it (if install stops with an unfinished-operation notice or says several installs were found, follow the command it prints), then try again." >&2
     return 1
   }
   AGMSGD_LOCK_INSTALL_ID="${expected_generation%%:*}"
