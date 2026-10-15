@@ -113,16 +113,16 @@ _with_op_lock_run() {
   }
   AGMSGD_LOCK_INSTALL_ID="${expected_generation%%:*}"
   lock_dir="$(mktemp -d "$SKILL_DIR/run/daemon-op-lock.XXXXXX")" || return 1
-  mkfifo "$lock_dir/in" "$lock_dir/out"
   if [ "$(_os)" = windows ]; then
-    # On Windows (MSYS) a FIFO opened for reading with no writer yet reads as
-    # end-of-file, so sqlite3 would quit before it got a single line. Hold
-    # both ends open here first so its opens never wait on, or race with, ours.
-    exec 8<> "$lock_dir/in"
-    exec 9<> "$lock_dir/out"
-    sqlite3 -batch "$LOCK_DB" < "$lock_dir/in" > "$lock_dir/out" 3>&- 4>&- &
-    lock_pid=$!
+    # The native sqlite3 on Windows cannot be driven through an MSYS FIFO (it
+    # never answers), so talk to it over a coprocess's anonymous pipes. eval
+    # keeps the coproc syntax out of the parse for shells that lack it.
+    eval 'coproc AGMSGD_LOCK_SQL { sqlite3 -batch "$LOCK_DB"; }'
+    lock_pid="$AGMSGD_LOCK_SQL_PID"
+    exec 8>&"${AGMSGD_LOCK_SQL[1]}" 9<&"${AGMSGD_LOCK_SQL[0]}"
+    eval "exec ${AGMSGD_LOCK_SQL[1]}>&- ${AGMSGD_LOCK_SQL[0]}<&-"
   else
+    mkfifo "$lock_dir/in" "$lock_dir/out"
     sqlite3 -batch "$LOCK_DB" < "$lock_dir/in" > "$lock_dir/out" 3>&- 4>&- &
     lock_pid=$!
     exec 8> "$lock_dir/in"
