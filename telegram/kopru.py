@@ -124,9 +124,19 @@ def tg(yontem, **veri):
 
 
 def yaz(metin):
-    """Telegram'a mesaj yazar; uzun metni parcalar (4096 siniri)."""
+    """Telegram'a mesaj yazar; uzun metni parcalar (4096 siniri).
+
+    True/False doner: her parca gitmediyse False. Cagiran bunu kontrol
+    ETMEK ZORUNDA - gonderim basarisizken imleci ilerletmek mesaji kalici
+    olarak kaybeder (bir sonraki dongude "zaten gorulmus" sayilir).
+    """
+    tamam = True
     for bas in range(0, max(len(metin), 1), 3500):
-        tg("sendMessage", chat_id=IZINLI, text=metin[bas:bas + 3500] or " ")
+        yanit = tg("sendMessage", chat_id=IZINLI,
+                   text=metin[bas:bas + 3500] or " ")
+        if not (yanit and yanit.get("ok")):
+            tamam = False
+    return tamam
 
 
 def uyeler():
@@ -145,15 +155,116 @@ def uyeler():
     return adlar
 
 
+IMLEC_DOSYA = os.path.expanduser("~/.agmsg-telegram-imlec")
+
+
+# Gorulen mesaj kimliklerinin son GECMIS_SINIR tanesi. Imlec tek bir sayi
+# OLAMAZ: api.sh'in dondurdugu `id` artan bir tamsayi degil, UUID string
+# (docs/building-on-agmsg.md ornegi "id":1234 gosteriyor ama gerceklesen
+# deger 01a14201-1e60-784c-... bicimli). Siralanabilir bir imlec olmadigi
+# icin gorulenler listesi tutuluyor.
+GECMIS_SINIR = 2000
+
+# Her okumada api.sh'tan istenen mesaj sayisi. GECMIS_SINIR bundan belirgin
+# olcude buyuk olmali, yoksa pencerede duran bir mesaj imlecten dusup
+# Telegram'a ikinci kez gonderilir.
+PENCERE = 300
+
+
+def imlec_oku():
+    """Gorulen kimlik listesi; dosya yoksa None (ilk kosum)."""
+    try:
+        with open(IMLEC_DOSYA, encoding="utf-8") as dosya:
+            return [s.strip() for s in dosya if s.strip()]
+    except Exception:
+        return None
+
+
+def imlec_yaz(liste):
+    try:
+        with open(IMLEC_DOSYA, "w", encoding="utf-8") as dosya:
+            dosya.write("\n".join(liste[-GECMIS_SINIR:]))
+    except OSError as hata:
+        sys.stderr.write("kopru: imlec yazilamadi: %s\n" % hata)
+
+
 def gelen_kutusu():
-    """Ali'ye gelen yeni mesajlari Telegram'a tasir."""
-    tamam, cikti = kabuk("inbox.sh", TAKIM, BEN)
-    if not tamam or not cikti or "No new messages" in cikti:
+    """Ali'ye gelen yeni mesajlari Telegram'a tasir.
+
+    inbox.sh degil api.sh kullanilir: olculen surelerde inbox.sh 11.4 sn,
+    api.sh ayni veriyi 1.3 sn'de veriyor. inbox.sh ayrica mesajlari
+    "okundu" isaretliyor, yani ajanin kendi gelen kutusunu tuketirdi.
+    Burada salt okuma yapilip hangi mesaja kadar gelindigi kendi imlec
+    dosyasinda tutulur.
+    """
+    # Pencere 50 degil 300: bir yayin her alici icin ayri satir yazdigi
+    # icin 9 uyelik bir takimda tek yayin ~8 satir demek. 50'lik pencere
+    # ~6 yayinda dolar ve henuz iletilmemis bir mesaj penceresinin
+    # disinda kalip sessizce atlanir.
+    tamam, cikti = kabuk("api.sh", "get", "teams", TAKIM, "messages",
+                         "--agent", BEN, "--limit", str(PENCERE))
+    if not tamam:
         return
-    satirlar = [s.strip() for s in cikti.splitlines() if s.strip()]
-    mesajlar = [s for s in satirlar if s.startswith("[")]
-    if mesajlar:
-        yaz("Takimdan yeni mesaj:\n\n" + "\n\n".join(mesajlar))
+
+    gorulen = imlec_oku()
+    ilk_kosum = gorulen is None
+    if gorulen is None:
+        gorulen = []
+    gorulen_kume = set(gorulen)
+
+    yeni = []
+    iletilecek = []  # yalnizca Telegram'a GIDECEK olanlarin kimlikleri
+    for satir in cikti.splitlines():
+        satir = satir.strip()
+        if not satir.startswith("{"):
+            continue
+        try:
+            kayit = json.loads(satir)
+        except Exception:
+            continue
+        kimlik = kayit.get("id")
+        if not kimlik or kimlik in gorulen_kume:
+            continue
+        gorulen_kume.add(kimlik)
+        # Yalnizca bana GELEN mesajlar; kendi gonderdiklerim Telegram'a
+        # geri dusmesin. Iletilmesi gerekmeyenler dogrudan gorulmus sayilir.
+        if kayit.get("to") != BEN or kayit.get("from") == BEN:
+            gorulen.append(kimlik)
+            continue
+        yeni.append(kayit)
+        iletilecek.append(kimlik)
+
+    # Ilk kosumda gecmisi Telegram'a bosaltma: her seyi gorulmus say.
+    if ilk_kosum:
+        imlec_yaz(gorulen + iletilecek)
+        return
+
+    if yeni:
+        parcalar = []
+        for kayit in yeni:
+            parcalar.append("%s (%s):\n%s" % (kayit.get("from"),
+                                              (kayit.get("at") or "")[11:19],
+                                              kayit.get("body") or ""))
+        if yaz("\n\n".join(parcalar)):
+            gorulen.extend(iletilecek)
+        else:
+            # Gonderim basarisiz: bu kimlikleri GORULMUS SAYMA. Imleci
+            # ilerletmek mesaji kalici olarak kaybederdi; boylece bir
+            # sonraki dongude tekrar denenir.
+            sys.stderr.write("kopru: %d mesaj Telegram'a gonderilemedi, "
+                             "imlec ilerletilmedi\n" % len(yeni))
+
+    imlec_yaz(gorulen)
+
+
+def ozel_gonder(hedef, govde):
+    """Tek bir uyeye ozel mesaj."""
+    if hedef not in uyeler():
+        yaz("'%s' takimda yok. uyeler yazarak listeye bak." % hedef)
+        return
+    tamam, cikti = kabuk("send.sh", TAKIM, BEN, hedef, govde=govde)
+    yaz("%s uyesine gonderildi." % hedef if tamam
+        else "Gonderilemedi: %s" % cikti)
 
 
 def komut_isle(metin):
@@ -161,13 +272,25 @@ def komut_isle(metin):
     if not metin:
         return
 
+    # Slash'siz tek kelimelik komutlar: telefonda / yazmak zahmetli.
+    # Yalnizca TAM eslesmede komut sayilir, boylece "uyeler" diye baslayan
+    # normal bir yayin mesaji komuta donusmez.
+    kisayol = {"yardim": "/yardim", "uyeler": "/uyeler", "sohbet": "/sohbet"}
+    if metin.lower() in kisayol:
+        metin = kisayol[metin.lower()]
+
     if metin.startswith("/yardim") or metin.startswith("/start"):
         yaz("agmsg koprusu - takim: %s, sen: %s\n\n"
-            "Duz metin yazarsan takimin tamamina yayinlanir.\n"
-            "/ozel <uye> <mesaj>  tek uyeye ozel mesaj\n"
-            "/uyeler              takim listesi\n"
-            "/sohbet [adet]       son mesaj akisi\n"
-            "/yardim              bu liste" % (TAKIM, BEN))
+            "Slash ZORUNLU DEGIL.\n\n"
+            "Ne yazarsan ne olur:\n"
+            "  duz metin         herkese yayin\n"
+            "  @claude mesaj     sadece claude'a\n"
+            "  claude: mesaj     sadece claude'a\n"
+            "  uyeler            takim listesi\n"
+            "  sohbet            son mesaj akisi\n"
+            "  yardim            bu liste\n\n"
+            "Slash'li uzun bicimler de calisir: /ozel <uye> <mesaj>, "
+            "/uyeler, /sohbet [adet]." % (TAKIM, BEN))
         return
 
     if metin.startswith("/uyeler"):
@@ -191,16 +314,32 @@ def komut_isle(metin):
     if metin.startswith("/ozel"):
         parcalar = metin.split(None, 2)
         if len(parcalar) < 3:
-            yaz("Kullanim: /ozel <uye> <mesaj>")
+            yaz("Kullanim: /ozel <uye> <mesaj>  (ya da kisayol: "
+                "@claude mesaj / claude: mesaj)")
             return
-        hedef, govde = parcalar[1], parcalar[2]
-        if hedef not in uyeler():
-            yaz("'%s' takimda yok. /uyeler ile listeye bak." % hedef)
-            return
-        tamam, cikti = kabuk("send.sh", TAKIM, BEN, hedef, govde=govde)
-        yaz("%s uyesine gonderildi." % hedef if tamam
-            else "Gonderilemedi: %s" % cikti)
+        ozel_gonder(parcalar[1], parcalar[2])
         return
+
+    # Slash'siz kisayollar. Telefonda / yazmak zahmetli, o yuzden ozel
+    # mesajin iki dogal bicimi de kabul edilir:
+    #   @claude mesaj
+    #   claude: mesaj
+    # "claude:" bicimi yalnizca iki noktadan onceki kelime GERCEKTEN bir
+    # uye adiysa ozel sayilir; "dikkat: sunu yapin" gibi normal bir yayin
+    # mesaji boylece yanlislikla ozel mesaja donusmez.
+    if metin.startswith("@"):
+        parcalar = metin[1:].split(None, 1)
+        if len(parcalar) == 2 and parcalar[0] in uyeler():
+            ozel_gonder(parcalar[0], parcalar[1])
+            return
+
+    if ":" in metin.split("\n")[0]:
+        bas, _, kalan = metin.partition(":")
+        bas = bas.strip()
+        kalan = kalan.strip()
+        if bas and kalan and " " not in bas and bas in uyeler():
+            ozel_gonder(bas, kalan)
+            return
 
     # Duz metin: takimin tamamina yayin.
     tamam, cikti = kabuk("yayin.sh", TAKIM, BEN, govde=metin)
